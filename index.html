@@ -85,11 +85,19 @@
             const [txForm, setTxForm] = useState({ date: new Date().toISOString().split('T')[0], market: 'TW', symbol: '', type: 'BUY', price: '', shares: '', fee: '20', tax: '0', txRate: '1' });
             const [divForm, setDivForm] = useState({ date: new Date().toISOString().split('T')[0], market: 'TW', symbol: '', amount: '', taxWithheld: '0', netAmount: '', divRate: '1' });
 
+            // JSONBin 家庭共用同步
+            const [jbKey, setJbKey] = useState(() => localStorage.getItem('gw_jb_key') || '');
+            const [jbBinId, setJbBinId] = useState(() => localStorage.getItem('gw_jb_bin') || '');
+            const [jbStatus, setJbStatus] = useState('');
+            const [isJbSyncing, setIsJbSyncing] = useState(false);
+
             useEffect(() => {
                 localStorage.setItem('gw_v15_txs', JSON.stringify(transactions));
                 localStorage.setItem('gw_v15_divs', JSON.stringify(dividends));
                 localStorage.setItem('gw_client_id', gdriveClientId);
-            }, [transactions, dividends, gdriveClientId]);
+                localStorage.setItem('gw_jb_key', jbKey);
+                localStorage.setItem('gw_jb_bin', jbBinId);
+            }, [transactions, dividends, gdriveClientId, jbKey, jbBinId]);
 
             const fetchFinancialData = async () => {
                 setPriceStatus('更新中...');
@@ -367,6 +375,74 @@
                 setDivForm(updated);
             };
 
+            // ===== JSONBin 家庭共用同步 =====
+            const handleJbCreate = async () => {
+                if (!jbKey.trim()) { alert('請先輸入 API Key'); return; }
+                setIsJbSyncing(true); setJbStatus('建立中...');
+                try {
+                    const res = await fetch('https://api.jsonbin.io/v3/b', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-Master-Key': jbKey.trim(), 'X-Bin-Name': 'glowwealth-family', 'X-Bin-Private': 'true' },
+                        body: JSON.stringify({ transactions, dividends, savedAt: new Date().toISOString() })
+                    });
+                    const data = await res.json();
+                    if (data?.metadata?.id) { setJbBinId(data.metadata.id); setJbStatus('✓ 共用空間建立成功，請把 Bin ID 傳給家人'); }
+                    else setJbStatus('建立失敗：' + JSON.stringify(data));
+                } catch(e) { setJbStatus('建立失敗：' + e.message); }
+                setIsJbSyncing(false);
+            };
+            const handleJbUpload = async () => {
+                if (!jbKey.trim() || !jbBinId.trim()) { alert('請先設定 API Key 和 Bin ID'); return; }
+                setIsJbSyncing(true); setJbStatus('上傳中...');
+                try {
+                    const res = await fetch(`https://api.jsonbin.io/v3/b/${jbBinId.trim()}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json', 'X-Master-Key': jbKey.trim() },
+                        body: JSON.stringify({ transactions, dividends, savedAt: new Date().toISOString() })
+                    });
+                    setJbStatus(res.ok ? '✓ 上傳成功 ' + new Date().toLocaleTimeString() : '上傳失敗 ' + res.status);
+                } catch(e) { setJbStatus('上傳失敗：' + e.message); }
+                setIsJbSyncing(false);
+            };
+            const handleJbDownload = async () => {
+                if (!jbKey.trim() || !jbBinId.trim()) { alert('請先設定 API Key 和 Bin ID'); return; }
+                if (!confirm('確定從共用空間載入？本機資料將被覆蓋。')) return;
+                setIsJbSyncing(true); setJbStatus('下載中...');
+                try {
+                    const res = await fetch(`https://api.jsonbin.io/v3/b/${jbBinId.trim()}/latest`, {
+                        headers: { 'X-Master-Key': jbKey.trim() }
+                    });
+                    const data = await res.json();
+                    if (data?.record?.transactions) setTransactions(data.record.transactions);
+                    if (data?.record?.dividends) setDividends(data.record.dividends);
+                    setJbStatus('✓ 載入成功 ' + new Date().toLocaleTimeString());
+                } catch(e) { setJbStatus('載入失敗：' + e.message); }
+                setIsJbSyncing(false);
+            };
+
+            // ===== 匯出 / 匯入 JSON =====
+            const handleExportJson = () => {
+                const blob = new Blob([JSON.stringify({ transactions, dividends, exportedAt: new Date().toISOString() }, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a'); a.href = url; a.download = `glowwealth_${new Date().toISOString().split('T')[0]}.json`; a.click();
+                URL.revokeObjectURL(url);
+            };
+            const handleImportJson = (e) => {
+                const file = e.target.files[0]; if (!file) return;
+                if (!confirm('確定匯入？本機資料將被覆蓋。')) { e.target.value = ''; return; }
+                const reader = new FileReader();
+                reader.onload = evt => {
+                    try {
+                        const data = JSON.parse(evt.target.result);
+                        if (data.transactions) setTransactions(data.transactions);
+                        if (data.dividends) setDividends(data.dividends);
+                        alert('✓ 匯入成功');
+                    } catch { alert('檔案格式錯誤，請確認是 GlowWealth 匯出的 JSON'); }
+                };
+                reader.readAsText(file);
+                e.target.value = '';
+            };
+
             // 儲存配息，reinvest=true 時同步跳到記帳 tab 並預填買入表單
             const handleSaveDivForm = (reinvest = false) => {
                 if (!divForm.symbol || !divForm.amount) return;
@@ -614,11 +690,53 @@
                         </div>
                     )}
 
-                    {/* Tab: 同步 (Google Drive) */}
+                    {/* Tab: 同步 */}
                     {activeTab === 'drive' && (
                         <div className="space-y-4">
+
+                            {/* ── 家庭共用同步（JSONBin，免 Google 登入）── */}
                             <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm space-y-4">
-                                <h3 className="font-extrabold text-slate-800 text-sm">Google Drive 雲端同步</h3>
+                                <div>
+                                    <h3 className="font-extrabold text-slate-800 text-sm">👨‍👩‍👧 家庭共用同步</h3>
+                                    <p className="text-[11px] text-slate-400 mt-1">不需 Google 帳號。建立共用空間後把 API Key + Bin ID 傳給家人，所有人都能上傳/下載。</p>
+                                </div>
+                                <div className="space-y-3">
+                                    <div>
+                                        <label className="text-[11px] font-bold text-slate-500 block mb-1">JSONBin API Key（Master Key）</label>
+                                        <input type="password" placeholder="$2b$10$..." value={jbKey} onChange={e => setJbKey(e.target.value)} className="w-full bg-slate-50 border border-slate-200 p-2.5 rounded-xl text-xs font-mono" />
+                                        <div className="text-[10px] text-slate-400 mt-1">免費申請：<a href="https://jsonbin.io" target="_blank" className="text-blue-500 underline">jsonbin.io</a> → 登入 → API Keys → 複製 Master Key</div>
+                                    </div>
+                                    <div>
+                                        <label className="text-[11px] font-bold text-slate-500 block mb-1">共用空間 ID（Bin ID）</label>
+                                        <input type="text" placeholder="第一次使用請點「建立新共用空間」" value={jbBinId} onChange={e => setJbBinId(e.target.value)} className="w-full bg-slate-50 border border-slate-200 p-2.5 rounded-xl text-xs font-mono" />
+                                    </div>
+                                    {jbStatus && <div className={`text-xs font-bold px-3 py-2 rounded-xl ${jbStatus.startsWith('✓') ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{jbStatus}</div>}
+                                    <div className="flex flex-wrap gap-2">
+                                        {!jbBinId && <button onClick={handleJbCreate} disabled={isJbSyncing || !jbKey} className="bg-blue-600 text-white font-bold px-4 py-2 rounded-xl text-xs hover:bg-blue-700 disabled:opacity-50 transition">＋ 建立新共用空間</button>}
+                                        {jbBinId && <>
+                                            <button onClick={handleJbUpload} disabled={isJbSyncing} className="bg-slate-900 text-white font-bold px-4 py-2 rounded-xl text-xs hover:bg-slate-800 disabled:opacity-50 transition">⬆️ 上傳最新資料</button>
+                                            <button onClick={handleJbDownload} disabled={isJbSyncing} className="border border-slate-200 text-slate-700 font-bold px-4 py-2 rounded-xl text-xs hover:bg-slate-50 disabled:opacity-50 transition">⬇️ 下載共用資料</button>
+                                            <button onClick={() => { if(confirm('確定清除 Bin ID？不會刪除雲端資料。')) setJbBinId(''); }} className="text-slate-400 hover:text-rose-500 font-bold px-3 py-2 rounded-xl text-xs border border-slate-200 transition">換空間</button>
+                                        </>}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* ── 匯出 / 匯入 JSON ── */}
+                            <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm space-y-3">
+                                <h3 className="font-extrabold text-slate-800 text-sm">📁 匯出 / 匯入 JSON</h3>
+                                <p className="text-[11px] text-slate-400">離線備份或手動分享給家人（LINE / Email）</p>
+                                <div className="flex flex-wrap gap-2">
+                                    <button onClick={handleExportJson} className="bg-amber-500 text-white font-bold px-4 py-2 rounded-xl text-xs hover:bg-amber-600 transition">⬇️ 匯出 JSON</button>
+                                    <label className="bg-white border border-slate-200 text-slate-700 font-bold px-4 py-2 rounded-xl text-xs hover:bg-slate-50 transition cursor-pointer">
+                                        ⬆️ 匯入 JSON <input type="file" accept=".json" onChange={handleImportJson} className="hidden" />
+                                    </label>
+                                </div>
+                            </div>
+
+                            {/* ── Google Drive（個人備份） ── */}
+                            <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm space-y-4">
+                                <h3 className="font-extrabold text-slate-800 text-sm">Google Drive 個人備份</h3>
                                 {!gdriveToken ? (
                                     <div className="space-y-3">
                                         <div>
