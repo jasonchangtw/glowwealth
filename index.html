@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GlowWealth - 實時金融自動化雲端總覽</title>
+    <title>GlowWealth - 家庭投資與配息總覽</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -36,11 +36,14 @@
             const [activeTab, setActiveTab] = useState('dashboard');
             const [currency, setCurrency] = useState('TWD');
             const [exchangeRate, setExchangeRate] = useState(31.2); 
-            const [priceData, setPriceData] = useState({}); // 儲存實時網路抓到的市價
+            const [priceData, setPriceData] = useState({}); 
             const [priceStatus, setPriceStatus] = useState('載入中');
             
-            const [transactions, setTransactions] = useState(() => JSON.parse(localStorage.getItem('gw_v12_txs') || '[]'));
-            const [dividends, setDividends] = useState(() => JSON.parse(localStorage.getItem('gw_v12_divs') || '[]'));
+            // 證券折扣設定變數 (富邦電子下單常態 2 折，若你是 1.8 折可直接將下方的 0.2 改為 0.18)
+            const [fubonDiscount, setFubonDiscount] = useState(0.2); 
+
+            const [transactions, setTransactions] = useState(() => JSON.parse(localStorage.getItem('gw_v13_txs') || '[]'));
+            const [dividends, setDividends] = useState(() => JSON.parse(localStorage.getItem('gw_v13_divs') || '[]'));
             
             const [gdriveClientId, setGdriveClientId] = useState(() => localStorage.getItem('gw_client_id') || '');
             const [gdriveToken, setGdriveToken] = useState(null);
@@ -48,76 +51,52 @@
             const [syncStatus, setSyncStatus] = useState('本機模式');
             const [isSyncing, setIsSyncing] = useState(false);
 
+            // 表單初始狀態
             const [txForm, setTxForm] = useState({ date: new Date().toISOString().split('T')[0], market: 'TW', symbol: '', type: 'BUY', price: '', shares: '', fee: '0', tax: '0' });
             const [divForm, setDivForm] = useState({ date: new Date().toISOString().split('T')[0], market: 'TW', symbol: '', amount: '', taxWithheld: '0', netAmount: '' });
 
             useEffect(() => {
-                localStorage.setItem('gw_v12_txs', JSON.stringify(transactions));
-                localStorage.setItem('gw_v12_divs', JSON.stringify(dividends));
+                localStorage.setItem('gw_v13_txs', JSON.stringify(transactions));
+                localStorage.setItem('gw_v13_divs', JSON.stringify(dividends));
                 localStorage.setItem('gw_client_id', gdriveClientId);
             }, [transactions, dividends, gdriveClientId]);
 
-            // ==================== 🌐 核心升級：自動連線抓取實時匯率與股價 ====================
+            // 金融網路實時數據連線
             const fetchFinancialData = async () => {
                 try {
-                    // 1. 自動抓取實時匯率 (USD to TWD)
                     const fxRes = await fetch('https://open.er-api.com/v6/latest/USD');
                     const fxData = await fxRes.json();
-                    if (fxData?.rates?.TWD) {
-                        setExchangeRate(parseFloat(fxData.rates.TWD.toFixed(2)));
-                    }
+                    if (fxData?.rates?.TWD) setExchangeRate(parseFloat(fxData.rates.TWD.toFixed(2)));
 
-                    // 2. 蒐集帳本中所有出現過的股票代號
                     const symbols = [...new Set(transactions.map(t => t.symbol.toUpperCase()))];
-                    if (symbols.length === 0) {
-                        setPriceStatus('實際');
-                        return;
-                    }
+                    if (symbols.length === 0) { setPriceStatus('實際'); return; }
 
                     const fetchedPrices = {};
-                    
-                    // 3. 透過多元跨域中繼站抓取股價
                     for (const sym of symbols) {
                         try {
                             let price = 0;
                             if (isNaN(sym)) {
-                                // 🇺🇸 美股：透過 Yahoo Finance Api 轉譯中繼
                                 const yfUrl = `https://query1.financeapi.com/v7/finance/quote?symbols=${sym}`;
                                 const proxyRes = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(yfUrl)}`);
                                 const proxyData = await proxyRes.json();
                                 const json = JSON.parse(proxyData.contents);
                                 price = json?.quoteResponse?.result?.[0]?.regularMarketPrice || 0;
                             } else {
-                                // 🇹🇼 台股：透過開放金融中繼 API
                                 const twRes = await fetch(`https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=${sym}&start_date=${new Date(Date.now() - 5*24*60*60*1000).toISOString().split('T')[0]}`);
                                 const twData = await twRes.json();
-                                if (twData?.data && twData.data.length > 0) {
-                                    price = twData.data[twData.data.length - 1].close || 0;
-                                }
+                                if (twData?.data && twData.data.length > 0) price = twData.data[twData.data.length - 1].close || 0;
                             }
                             if (price > 0) fetchedPrices[sym] = price;
-                        } catch (err) {
-                            console.error(`無法獲取標的 ${sym} 的實時價格`, err);
-                        }
+                        } catch (err) { console.error(err); }
                     }
-
                     setPriceData(fetchedPrices);
                     setPriceStatus('實際');
-                } catch (e) {
-                    setPriceStatus('斷線備援');
-                    console.error("金融網路連線逾時");
-                }
+                } catch (e) { setPriceStatus('斷線備援'); }
             };
 
-            // 網頁開啟時，自動執行實時抓取
-            useEffect(() => {
-                fetchFinancialData();
-                // 每 5 分鐘自動在背景刷新一次現價
-                const interval = setInterval(fetchFinancialData, 300000);
-                return () => clearInterval(interval);
-            }, [transactions]);
+            useEffect(() => { fetchFinancialData(); }, [transactions]);
 
-            // ==================== 🛠️ 高級資產自動化精算大腦 ====================
+            // ==================== 🛠️ 高級精算大腦：融入富邦手續費與稅金 ====================
             const portfolio = useMemo(() => {
                 const summary = {};
                 const sortedTx = [...transactions].sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -134,25 +113,25 @@
                     
                     const s = parseFloat(shares || 0);
                     const p = parseFloat(price || 0);
-                    const f = parseFloat(fee || 0);
+                    const f = parseFloat(fee || 0); // 這裡讀取記帳本當時自動計算的費用
                     const t = parseFloat(tax || 0);
                     summary[symbol].totalFeeAndTax += (f + t);
 
                     if (type === 'BUY') {
                         summary[symbol].totalShares += s;
                         summary[symbol].totalBuyShares += s;
-                        summary[symbol].totalBuyCost += (s * p) + f + t;
+                        // 買入總成本包含：成交總額 ＋ 證券手續費
+                        summary[symbol].totalBuyCost += (s * p) + f;
                     } else if (type === 'SELL') {
                         const currentAvgCost = summary[symbol].totalShares > 0 ? (summary[symbol].totalBuyCost / summary[symbol].totalBuyShares) : 0;
+                        // 賣出實收包含：成交總額 － 手續費 － 證交稅
                         summary[symbol].realizedProfit += (s * p - f - t) - (s * currentAvgCost);
                         summary[symbol].totalShares -= s;
                     }
                 });
 
                 return Object.values(summary).map(item => {
-                    // 🚀 核心升級：自動對接實時網路抓到的市價，若網路異常才用買入價防錯
                     const livePrice = priceData[item.symbol] || (transactions.find(t => t.symbol === item.symbol)?.price || 0);
-                    
                     const currentShares = item.totalShares;
                     const avgBuyCost = item.totalBuyShares > 0 ? (item.totalBuyCost / item.totalBuyShares) : 0;
                     const currentInvestCost = currentShares * avgBuyCost;
@@ -191,6 +170,37 @@
                     usWeight: totalValueTwd > 0 ? (usValue / totalValueTwd) * 100 : 64.8
                 };
             }, [portfolio, dividends, exchangeRate, transactions]);
+
+            // ==================== 智能連動：表單輸入時自動估算富邦手續費 ====================
+            const handleTxFormChange = (e) => {
+                const { name, value } = e.target;
+                let updated = { ...txForm, [name]: value };
+                
+                if (name === 'symbol') {
+                    const s = value.toUpperCase();
+                    updated.symbol = s;
+                    updated.name = STOCK_NAMES[s] || '';
+                }
+
+                // 當輸入完價格、股數、或是切換買賣動作時，自動幫你計算費用
+                const p = parseFloat(updated.price || 0);
+                const s = parseFloat(updated.shares || 0);
+                const totalAmt = p * s;
+
+                if (totalAmt > 0) {
+                    if (updated.market === 'TW') {
+                        // 台股手續費：總額 * 0.001425 * 富邦折讓，不滿 20 元以 20 元計
+                        updated.fee = Math.max(20, Math.round(totalAmt * 0.001425 * fubonDiscount));
+                        // 台股證交稅：只有賣出時才收取 0.3% (若是 ETF 則是 0.1%，此處採個股 0.3% 計算)
+                        updated.tax = updated.type === 'SELL' ? Math.round(totalAmt * 0.003) : 0;
+                    } else {
+                        // 美股複委託常態：許多券商現行買賣無低消，此處手續費先預設為 0，可手動自行微調
+                        updated.fee = 0;
+                        updated.tax = 0;
+                    }
+                }
+                setTxForm(updated);
+            };
 
             const handleDivFormChange = (e) => {
                 const { name, value } = e.target;
@@ -269,14 +279,14 @@
                     {/* 頂部控制列 */}
                     <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-200 pb-4">
                         <div>
-                            <div className="text-xs text-slate-400 font-mono font-bold uppercase tracking-wider">實時匯率監測網路</div>
+                            <div className="text-xs text-slate-400 font-mono font-bold uppercase tracking-wider">實時金融監測網路</div>
                             <h1 className="text-3xl font-black text-slate-900 tracking-tight mt-1">家庭總覽</h1>
                         </div>
                         <div className="flex flex-wrap gap-2">
                             <span className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${syncStatus === '雲端模式' ? 'bg-emerald-50 text-emerald-600 border border-emerald-200' : 'bg-slate-200/60 text-slate-600'}`}>
                                 {syncStatus === '雲端模式' ? `雲端模式 (${userDisplayName})` : syncStatus}
                             </span>
-                            <button onClick={fetchFinancialData} className="bg-white border border-slate-200 hover:bg-slate-50 px-3 py-1.5 rounded-xl text-xs font-bold shadow-sm text-slate-700 transition flex items-center gap-1">🔄 刷新現價</button>
+                            <button onClick={fetchFinancialData} className="bg-white border border-slate-200 hover:bg-slate-50 px-3 py-1.5 rounded-xl text-xs font-bold shadow-sm text-slate-700 transition">🔄 刷新現價</button>
                             <button onClick={() => setActiveTab('ledger')} className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-1.5 rounded-xl text-xs font-bold shadow-md transition">＋ 新增紀錄</button>
                         </div>
                     </div>
@@ -386,14 +396,13 @@
                                             <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden"><div style={{width: `${stats.usWeight}%`}} className="bg-slate-800 h-full"></div></div>
                                         </div>
                                     </div>
-                                    {/* 實時匯率資料狀態欄 */}
                                     <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-[11px] text-slate-500 mt-2 font-medium flex justify-between">
                                         <span>現行網路實時美元匯率：</span>
                                         <span className="font-mono font-bold text-slate-800">1 USD = {exchangeRate} TWD</span>
                                     </div>
                                     <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100 text-[11px] text-slate-500 font-medium flex justify-between">
-                                        <span>網路報價模組狀態：</span>
-                                        <span className="font-bold text-emerald-600">🟢 全自動實時中繼連線中</span>
+                                        <span>手續費參數 (富邦證券)：</span>
+                                        <span className="font-bold text-blue-600">⚡ 電子單常態 {fubonDiscount*10} 折 (低消 $20)</span>
                                     </div>
                                 </div>
                             </div>
@@ -403,17 +412,25 @@
                     {/* Tab 2: 記帳 */}
                     {activeTab === 'ledger' && (
                         <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm space-y-6">
-                            <form onSubmit={(e)=>{e.preventDefault(); if(!txForm.symbol||!txForm.price||!txForm.shares)return; setTransactions([{...txForm, id:Date.now().toString(), name:STOCK_NAMES[txForm.symbol]||txForm.symbol}, ...transactions]); setTxForm({...txForm, symbol:'', price:'', shares:''});}} className="grid grid-cols-1 sm:grid-cols-5 gap-3 items-end bg-slate-50 p-4 rounded-xl border border-slate-100">
-                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">交易日期</label><input type="date" value={txForm.date} onChange={e=>setTxForm({...txForm, date:e.target.value})} className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div>
-                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">標的代號</label><input type="text" placeholder="如 00878 或 AAPL" value={txForm.symbol} onChange={e=>{const s=e.target.value.toUpperCase(); setTxForm({...txForm, symbol:s, name:STOCK_NAMES[s]||''})}} className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs uppercase font-mono" /></div>
-                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">種類</label><select value={txForm.type} onChange={e=>setTxForm({...txForm, type:e.target.value})} className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs"><option value="BUY">買入</option><option value="SELL">賣出</option></select></div>
-                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">單價 / 股數</label><div className="flex gap-1"><input type="number" step="any" placeholder="單價" value={txForm.price} onChange={e=>setTxForm({...txForm, price:e.target.value})} className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /><input type="number" placeholder="股數" value={txForm.shares} onChange={e=>setTxForm({...txForm, shares:e.target.value})} className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div></div>
-                                <button type="submit" className="w-full bg-slate-900 text-white font-bold py-2 rounded-lg text-xs hover:bg-slate-800">儲存資產</button>
+                            {/* ✨ 核心升級：整合自動推算手續費與稅金的表單 ✨ */}
+                            <form onSubmit={(e)=>{e.preventDefault(); if(!txForm.symbol||!txForm.price||!txForm.shares)return; setTransactions([{...txForm, id:Date.now().toString(), name:STOCK_NAMES[txForm.symbol]||txForm.symbol}, ...transactions]); setTxForm({date:new Date().toISOString().split('T')[0], market:'TW', symbol:'', type:'BUY', price:'', shares:'', fee:'0', tax:'0'});}} className="grid grid-cols-1 sm:grid-cols-4 gap-4 items-end bg-slate-50 p-5 rounded-2xl border border-slate-100">
+                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">交易日期</label><input type="date" value={txForm.date} onChange={handleTxFormChange} name="date" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div>
+                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">標的代號 / 市場</label><div className="flex gap-1"><input type="text" placeholder="2330" value={txForm.symbol} onChange={handleTxFormChange} name="symbol" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs uppercase font-mono" /><select value={txForm.market} onChange={handleTxFormChange} name="market" className="bg-white border border-slate-200 p-2 rounded-lg text-xs"><option value="TW">台</option><option value="US">美</option></select></div></div>
+                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">種類</label><select value={txForm.type} onChange={handleTxFormChange} name="type" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs"><option value="BUY">買入</option><option value="SELL">賣出</option></select></div>
+                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">單價 / 股數</label><div className="flex gap-1"><input type="number" step="any" placeholder="單價" value={txForm.price} onChange={handleTxFormChange} name="price" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /><input type="number" placeholder="股數" value={txForm.shares} onChange={handleTxFormChange} name="shares" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div></div>
+                                
+                                {/* 顯示即時精算的手續費與稅金欄位 */}
+                                <div className="sm:col-span-3 grid grid-cols-2 gap-2 bg-white/80 p-2.5 rounded-xl border border-slate-200/60 text-xs text-slate-500">
+                                    <div>富邦手續費連動估算：<span className="font-mono font-bold text-slate-800">${txForm.fee}</span> <span className="text-[10px] text-slate-400">(2折保障低消$20)</span></div>
+                                    <div>預估政府證交稅 (僅賣出收取)：<span className="font-mono font-bold text-rose-500">${txForm.tax}</span></div>
+                                </div>
+                                <button type="submit" className="w-full bg-slate-900 text-white font-bold py-2.5 rounded-xl text-xs hover:bg-slate-800 shadow">儲存交易資產</button>
                             </form>
+                            
                             <table className="w-full text-left text-sm">
-                                <thead><tr className="text-slate-400 text-xs border-b"><th className="pb-2">日期</th><th className="pb-2">標的</th><th className="pb-2">種類</th><th className="pb-2">單價</th><th className="pb-2">股數</th><th className="pb-2">操作</th></tr></thead>
+                                <thead><tr className="text-slate-400 text-xs border-b"><th className="pb-2">日期</th><th className="pb-2">標的</th><th className="pb-2">種類</th><th className="pb-2">單價</th><th className="pb-2">股數</th><th className="pb-2">實扣手續費</th><th className="pb-2">操作</th></tr></thead>
                                 <tbody>
-                                    {transactions.map(t=>(<tr key={t.id} class="border-b"><td className="py-3 text-xs text-slate-400 font-mono">{t.date}</td><td className="py-3 font-bold">{t.symbol}</td><td>{t.type==='BUY'?'買入':'賣出'}</td><td className="py-3 font-mono">${t.price}</td><td className="py-3 font-mono">{t.shares}</td><td><button onClick={()=>setTransactions(transactions.filter(x=>x.id!==t.id))} className="text-slate-300 hover:text-rose-500">🗑️</button></td></tr>))}
+                                    {transactions.map(t=>(<tr key={t.id} class="border-b"><td className="py-3 text-xs text-slate-400 font-mono">{t.date}</td><td className="py-3 font-bold">{t.symbol}</td><td><span className={`px-2 py-0.5 rounded text-[10px] font-bold ${t.type==='BUY'?'bg-rose-50 text-rose-600':'bg-emerald-50 text-emerald-600'}`}>{t.type==='BUY'?'買入':'賣出'}</span></td><td className="py-3 font-mono">${t.price}</td><td className="py-3 font-mono">{t.shares}</td><td className="py-3 font-mono text-slate-400">${t.fee || 20}</td><td><button onClick={()=>setTransactions(transactions.filter(x=>x.id!==t.id))} className="text-slate-300 hover:text-rose-500">🗑️</button></td></tr>))}
                                 </tbody>
                             </table>
                         </div>
