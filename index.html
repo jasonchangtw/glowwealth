@@ -83,7 +83,7 @@
             const [selectedFileId, setSelectedFileId] = useState('');
 
             const [txForm, setTxForm] = useState({ date: new Date().toISOString().split('T')[0], market: 'TW', symbol: '', type: 'BUY', price: '', shares: '', fee: '20', tax: '0', txRate: '1' });
-            const [divForm, setDivForm] = useState({ date: new Date().toISOString().split('T')[0], market: 'TW', symbol: '', amount: '', taxWithheld: '0', netAmount: '' });
+            const [divForm, setDivForm] = useState({ date: new Date().toISOString().split('T')[0], market: 'TW', symbol: '', amount: '', taxWithheld: '0', netAmount: '', divRate: '1' });
 
             useEffect(() => {
                 localStorage.setItem('gw_v15_txs', JSON.stringify(transactions));
@@ -184,7 +184,10 @@
                     const currentMarketValueTwd = currentShares * effectivePrice * (item.market === 'US' ? exchangeRate : 1);
 
                     const itemDivsTwd = dividends ? dividends.filter(d => d && d.symbol && d.symbol.toUpperCase().trim() === item.symbol)
-                        .reduce((sum, d) => sum + parseFloat(d.netAmount || 0) * (d.market === 'US' ? exchangeRate : 1), 0) : 0;
+                        .reduce((sum, d) => {
+                            const rate = d.market === 'US' ? (parseFloat(d.divRate || 0) || exchangeRate) : 1;
+                            return sum + parseFloat(d.netAmount || 0) * rate;
+                        }, 0) : 0;
 
                     const totalProfitTwd = (currentMarketValueTwd - currentInvestCostTwd) + item.realizedProfitTwd + itemDivsTwd;
                     const roi = currentInvestCostTwd > 0 ? (totalProfitTwd / currentInvestCostTwd) * 100 : 0;
@@ -216,7 +219,11 @@
                 return {
                     totalValue: isBookEmpty ? 19480 : totalValueTwd,
                     roi: isBookEmpty ? 4.18 : (totalCostTwd > 0 ? (totalProfitTwd / totalCostTwd) * 100 : 0),
-                    divIncome: dividends && dividends.length > 0 ? dividends.reduce((sum, d) => sum + (d ? parseFloat(d.netAmount || 0) : 0) * (d && d.market === 'TW' ? 1 : exchangeRate), 0) : 192,
+                    divIncome: dividends && dividends.length > 0 ? dividends.reduce((sum, d) => {
+                        if (!d) return sum;
+                        const rate = d.market === 'US' ? (parseFloat(d.divRate || 0) || exchangeRate) : 1;
+                        return sum + parseFloat(d.netAmount || 0) * rate;
+                    }, 0) : 192,
                     twWeight: totalValueTwd > 0 ? (twValue / totalValueTwd) * 100 : 35.2,
                     usWeight: totalValueTwd > 0 ? (usValue / totalValueTwd) * 100 : 64.8
                 };
@@ -326,6 +333,15 @@
             const handleDivInput = (e) => {
                 const { name, value } = e.target;
                 let updated = { ...divForm, [name]: value };
+                if (name === 'symbol') {
+                    const cleanSym = value.toUpperCase().trim(); updated.symbol = cleanSym;
+                    const autoIsUs = cleanSym.length > 0 && !/^\d+A?$/.test(cleanSym);
+                    updated.market = autoIsUs ? 'US' : 'TW';
+                    updated.divRate = autoIsUs ? exchangeRate.toString() : '1';
+                }
+                if (name === 'market') {
+                    updated.divRate = value === 'US' ? exchangeRate.toString() : '1';
+                }
                 if (name === 'amount' || name === 'taxWithheld') {
                     const amt = parseFloat(name === 'amount' ? value : updated.amount) || 0;
                     const tax = parseFloat(name === 'taxWithheld' ? value : updated.taxWithheld) || 0;
@@ -341,7 +357,7 @@
                     : (parseFloat(divForm.amount || 0) - parseFloat(divForm.taxWithheld || 0)).toFixed(2);
                 const newDiv = { ...divForm, id: Date.now().toString(), netAmount: netAmt };
                 setDividends([newDiv, ...dividends]);
-                setDivForm({ date: new Date().toISOString().split('T')[0], market: 'TW', symbol: '', amount: '', taxWithheld: '0', netAmount: '' });
+                setDivForm({ date: new Date().toISOString().split('T')[0], market: 'TW', symbol: '', amount: '', taxWithheld: '0', netAmount: '', divRate: '1' });
                 if (reinvest) {
                     setTxForm({
                         date: newDiv.date, market: newDiv.market, symbol: newDiv.symbol,
@@ -489,6 +505,7 @@
                                 <div><label className="text-[11px] font-bold text-slate-500 block mb-1">配息總額（稅前）</label><input type="number" step="any" placeholder="0.00" value={divForm.amount} onChange={handleDivInput} name="amount" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div>
                                 <div><label className="text-[11px] font-bold text-slate-500 block mb-1">扣繳稅額</label><input type="number" step="any" placeholder="0" value={divForm.taxWithheld} onChange={handleDivInput} name="taxWithheld" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div>
                                 <div><label className="text-[11px] font-bold text-slate-500 block mb-1">實收淨額（自動計算）</label><input type="number" step="any" value={divForm.netAmount} readOnly className="w-full bg-slate-100 border border-slate-200 p-2 rounded-lg text-xs font-mono font-bold text-slate-700 cursor-not-allowed" /></div>
+                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">💡 配息當日匯率（美股必填）</label><input type="number" step="any" value={divForm.divRate} onChange={handleDivInput} name="divRate" disabled={divForm.market !== 'US'} className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs font-mono font-bold text-center disabled:opacity-40 disabled:bg-slate-100" /></div>
                                 <div className="sm:col-span-2 flex items-end gap-2">
                                     <button type="submit" className="flex-1 bg-amber-500 text-white font-bold py-2.5 rounded-xl text-xs hover:bg-amber-600 shadow transition">儲存配息</button>
                                     <button type="button" onClick={() => handleSaveDivForm(true)} className="flex-1 bg-blue-600 text-white font-bold py-2.5 rounded-xl text-xs hover:bg-blue-700 shadow transition">儲存＋再投入 ↩</button>
@@ -497,9 +514,9 @@
 
                             <div className="overflow-x-auto">
                                 <table className="w-full text-left text-sm">
-                                    <thead><tr className="text-slate-400 text-xs border-b"><th className="pb-2">日期</th><th className="pb-2">標的</th><th className="pb-2">市場</th><th className="pb-2">稅前金額</th><th className="pb-2">扣繳稅</th><th className="pb-2 text-amber-600">實收淨額</th><th className="pb-2">操作</th></tr></thead>
+                                    <thead><tr className="text-slate-400 text-xs border-b"><th className="pb-2">日期</th><th className="pb-2">標的</th><th className="pb-2">市場</th><th className="pb-2">稅前金額</th><th className="pb-2">扣繳稅</th><th className="pb-2 text-amber-600">實收淨額</th><th className="pb-2">匯率</th><th className="pb-2">操作</th></tr></thead>
                                     <tbody>
-                                        {dividends.length === 0 && <tr><td colSpan="7" className="py-8 text-center text-slate-400 text-xs">尚無配息紀錄</td></tr>}
+                                        {dividends.length === 0 && <tr><td colSpan="8" className="py-8 text-center text-slate-400 text-xs">尚無配息紀錄</td></tr>}
                                         {dividends.map(d => (
                                             <tr key={d.id} className="border-b hover:bg-slate-50">
                                                 <td className="py-3 text-xs text-slate-400 font-mono">{d.date}</td>
@@ -508,6 +525,7 @@
                                                 <td className="py-3 font-mono text-slate-600">${Number(d.amount || 0).toFixed(2)}</td>
                                                 <td className="py-3 font-mono text-slate-400">-${Number(d.taxWithheld || 0).toFixed(2)}</td>
                                                 <td className="py-3 font-mono text-amber-600 font-bold">${Number(d.netAmount || 0).toFixed(2)}</td>
+                                                <td className="py-3 font-mono text-slate-500 text-xs">{d.market === 'US' ? (parseFloat(d.divRate || 0) || '—') : '—'}</td>
                                                 <td className="py-3">
                                                     <div className="flex gap-3 items-center">
                                                         <button onClick={() => {
