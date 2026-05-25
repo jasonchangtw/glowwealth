@@ -113,12 +113,10 @@
                             let price = 0;
                             const isAmerican = isNaN(sym) && !/^\d+A?$/.test(sym);
                             if (isAmerican) {
-                                // 修正：正確的 Yahoo Finance URL（原本 financeapi.com 是錯的）
-                                const yfUrl = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${sym}`;
-                                const proxyRes = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(yfUrl)}`);
-                                const proxyData = await proxyRes.json();
-                                const json = JSON.parse(proxyData.contents);
-                                price = json?.quoteResponse?.result?.[0]?.regularMarketPrice || 0;
+                                const yfUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=1d`;
+                                const proxyRes = await fetch(`https://corsproxy.io/?${encodeURIComponent(yfUrl)}`);
+                                const json = await proxyRes.json();
+                                price = json?.chart?.result?.[0]?.meta?.regularMarketPrice || 0;
                             } else {
                                 const cleanSym = sym.replace(/A$/, '');
                                 const twRes = await fetch(`https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=${cleanSym}&start_date=${new Date(Date.now() - 6*24*60*60*1000).toISOString().split('T')[0]}`);
