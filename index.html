@@ -82,7 +82,7 @@
             const [cloudFiles, setCloudFiles] = useState([]);
             const [selectedFileId, setSelectedFileId] = useState('');
 
-            const [txForm, setTxForm] = useState({ date: new Date().toISOString().split('T')[0], symbol: '', type: 'BUY', price: '', shares: '', fee: '20', tax: '0', txRate: '1' });
+            const [txForm, setTxForm] = useState({ date: new Date().toISOString().split('T')[0], market: 'TW', symbol: '', type: 'BUY', price: '', shares: '', fee: '20', tax: '0', txRate: '1' });
             const [divForm, setDivForm] = useState({ date: new Date().toISOString().split('T')[0], market: 'TW', symbol: '', amount: '', taxWithheld: '0', netAmount: '' });
 
             useEffect(() => {
@@ -299,12 +299,19 @@
                 const { name, value } = e.target; let updated = { ...txForm, [name]: value };
                 if (name === 'symbol') {
                     const cleanSym = value.toUpperCase().trim(); updated.symbol = cleanSym;
-                    const isUs = isNaN(cleanSym) && !/^\d+A?$/.test(cleanSym);
-                    if (isUs) { updated.txRate = exchangeRate.toString(); updated.fee = usBuyFeeConfig.toString(); updated.tax = '0'; }
+                    // 由代號自動推斷市場，使用者也可手動覆蓋 market 欄
+                    const autoIsUs = cleanSym.length > 0 && !/^\d+A?$/.test(cleanSym);
+                    updated.market = autoIsUs ? 'US' : 'TW';
+                    if (autoIsUs) { updated.txRate = exchangeRate.toString(); updated.fee = usBuyFeeConfig.toString(); updated.tax = '0'; }
+                    else { updated.txRate = '1'; updated.fee = '20'; updated.tax = '0'; }
+                }
+                if (name === 'market') {
+                    // 手動切換市場時同步調整匯率與手續費預設值
+                    if (value === 'US') { updated.txRate = exchangeRate.toString(); updated.fee = usBuyFeeConfig.toString(); updated.tax = '0'; }
                     else { updated.txRate = '1'; updated.fee = '20'; updated.tax = '0'; }
                 }
                 const p = parseFloat(updated.price || 0); const s = parseFloat(updated.shares || 0); const total = p * s;
-                const isUsAsset = isNaN(updated.symbol) && !/^\d+A?$/.test(updated.symbol);
+                const isUsAsset = updated.market === 'US';
                 if (total > 0) {
                     if (!isUsAsset) {
                         updated.fee = Math.max(20, Math.round(total * 0.001425 * twDiscount)).toString();
@@ -414,18 +421,18 @@
                             <form onSubmit={(e) => {
                                 e.preventDefault();
                                 if (!txForm.symbol || !txForm.price || !txForm.shares) return;
-                                const isUs = isNaN(txForm.symbol) && !/^\d+A?$/.test(txForm.symbol);
-                                setTransactions([{ ...txForm, id: Date.now().toString(), market: isUs ? 'US' : 'TW', name: STOCK_NAMES[txForm.symbol.toUpperCase().trim()] || txForm.symbol }, ...transactions]);
-                                setTxForm({ date: new Date().toISOString().split('T')[0], symbol: '', type: 'BUY', price: '', shares: '', fee: '20', tax: '0', txRate: '1' });
+                                setTransactions([{ ...txForm, id: Date.now().toString(), name: STOCK_NAMES[txForm.symbol.toUpperCase().trim()] || txForm.symbol }, ...transactions]);
+                                setTxForm({ date: new Date().toISOString().split('T')[0], market: 'TW', symbol: '', type: 'BUY', price: '', shares: '', fee: '20', tax: '0', txRate: '1' });
                             }} className="grid grid-cols-1 sm:grid-cols-4 gap-4 items-end bg-slate-50 p-5 rounded-2xl border border-slate-100">
                                 <div><label className="text-[11px] font-bold text-slate-500 block mb-1">交易日期</label><input type="date" value={txForm.date} onChange={handleFormInput} name="date" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div>
+                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">市場</label><select value={txForm.market} onChange={handleFormInput} name="market" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs font-bold"><option value="TW">🇹🇼 台股</option><option value="US">🇺🇸 美股</option></select></div>
                                 <div><label className="text-[11px] font-bold text-slate-500 block mb-1">標的代號</label><input type="text" placeholder="如 00878 / QQQ / 5289" value={txForm.symbol} onChange={handleFormInput} name="symbol" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs uppercase font-mono font-bold" /></div>
                                 <div><label className="text-[11px] font-bold text-slate-500 block mb-1">種類</label><select value={txForm.type} onChange={handleFormInput} name="type" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs font-bold"><option value="BUY">買入</option><option value="SELL">賣出</option></select></div>
                                 <div><label className="text-[11px] font-bold text-slate-500 block mb-1">單價 / 股數</label><div className="flex gap-1"><input type="number" step="any" placeholder="單價" value={txForm.price} onChange={handleFormInput} name="price" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /><input type="number" step="any" placeholder="股數" value={txForm.shares} onChange={handleFormInput} name="shares" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div></div>
                                 <div className="sm:col-span-3 grid grid-cols-1 sm:grid-cols-3 gap-3 bg-white/80 p-3 rounded-xl border border-slate-200/60 text-xs text-slate-500">
                                     <div>富邦手續費自動精算：<span className="font-mono font-bold text-slate-800">${txForm.fee}</span></div>
                                     <div>預估證交稅/規費：<span className="font-mono font-bold text-rose-500">${txForm.tax}</span></div>
-                                    <div><label className="block text-[10px] text-slate-400 font-bold mb-0.5">💡 扣款當日實際匯率</label><input type="number" step="any" value={txForm.txRate} onChange={handleFormInput} name="txRate" disabled={!(isNaN(txForm.symbol) && !/^\d+A?$/.test(txForm.symbol))} className="w-full bg-slate-50 border border-slate-200 px-2 py-0.5 rounded text-slate-800 font-mono font-bold text-center disabled:opacity-40" /></div>
+                                    <div><label className="block text-[10px] text-slate-400 font-bold mb-0.5">💡 扣款當日實際匯率</label><input type="number" step="any" value={txForm.txRate} onChange={handleFormInput} name="txRate" disabled={txForm.market !== 'US'} className="w-full bg-slate-50 border border-slate-200 px-2 py-0.5 rounded text-slate-800 font-mono font-bold text-center disabled:opacity-40" /></div>
                                 </div>
                                 <button type="submit" className="w-full bg-slate-900 text-white font-bold py-2.5 rounded-xl text-xs hover:bg-slate-800 shadow">儲存交易資產</button>
                             </form>
