@@ -85,7 +85,7 @@
             const [txForm, setTxForm] = useState({ date: new Date().toISOString().split('T')[0], market: 'TW', symbol: '', type: 'BUY', price: '', shares: '', fee: '20', tax: '0', txRate: '1' });
             const [divForm, setDivForm] = useState({ date: new Date().toISOString().split('T')[0], market: 'TW', symbol: '', amount: '', taxWithheld: '0', netAmount: '', divRate: '1' });
 
-            // JSONBin 家庭共用同步
+            // GitHub Gist 家庭共用同步
             const [jbKey, setJbKey] = useState(() => localStorage.getItem('gw_jb_key') || '');
             const [jbBinId, setJbBinId] = useState(() => localStorage.getItem('gw_jb_bin') || '');
             const [jbStatus, setJbStatus] = useState('');
@@ -698,11 +698,11 @@
                     {activeTab === 'drive' && (
                         <div className="space-y-4">
 
-                            {/* ── 家庭共用同步（JSONBin，免 Google 登入）── */}
+                            {/* ── 家庭共用同步（GitHub Gist，免 Google 登入）── */}
                             <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm space-y-4">
                                 <div>
                                     <h3 className="font-extrabold text-slate-800 text-sm">👨‍👩‍👧 家庭共用同步</h3>
-                                    <p className="text-[11px] text-slate-400 mt-1">不需 Google 帳號。建立共用空間後把 API Key + Bin ID 傳給家人，所有人都能上傳/下載。</p>
+                                    <p className="text-[11px] text-slate-400 mt-1">不需 Google 帳號。建立共用空間後把 GitHub Token + Gist ID 傳給家人，所有人都能上傳/下載。</p>
                                 </div>
                                 <div className="space-y-3">
                                     <div>
@@ -720,7 +720,7 @@
                                         {jbBinId && <>
                                             <button onClick={handleJbUpload} disabled={isJbSyncing} className="bg-slate-900 text-white font-bold px-4 py-2 rounded-xl text-xs hover:bg-slate-800 disabled:opacity-50 transition">⬆️ 上傳最新資料</button>
                                             <button onClick={handleJbDownload} disabled={isJbSyncing} className="border border-slate-200 text-slate-700 font-bold px-4 py-2 rounded-xl text-xs hover:bg-slate-50 disabled:opacity-50 transition">⬇️ 下載共用資料</button>
-                                            <button onClick={() => { if(confirm('確定清除 Bin ID？不會刪除雲端資料。')) setJbBinId(''); }} className="text-slate-400 hover:text-rose-500 font-bold px-3 py-2 rounded-xl text-xs border border-slate-200 transition">換空間</button>
+                                            <button onClick={() => { if(confirm('確定清除 Gist ID？不會刪除雲端資料。')) setJbBinId(''); }} className="text-slate-400 hover:text-rose-500 font-bold px-3 py-2 rounded-xl text-xs border border-slate-200 transition">換空間</button>
                                         </>}
                                     </div>
                                 </div>
