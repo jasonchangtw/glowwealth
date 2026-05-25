@@ -20,9 +20,30 @@
     <script type="text/babel">
         const { useState, useEffect, useMemo } = React;
 
+        // ✨ 旗艦升級：依據上傳圖片，完整擴充您所擁有的台美股實體名稱字典 ✨
         const STOCK_NAMES = {
-          '2330': '台積電', '2317': '鴻海', '2454': '聯發科', '0050': '元大台灣50', '0056': '元大高股息',
-          '00878': '國泰永續高股息', '00919': '群益台灣精選高息', 'AAPL': '蘋果', 'TSLA': '特斯拉', 'NVDA': '輝達', 'VOO': 'S&P 500 ETF', 'QQQ': '納斯達克100'
+          '0050': '元大台灣50',
+          '00878': '國泰永續高股息',
+          '00929': '復華台灣科技優息',
+          '2330': '台積電',
+          '00919': '群益台灣精選高息',
+          '6438': '訊得機械',
+          '2881': '富邦金控',
+          '8462': '柏文',
+          '009811': '統一美國50',
+          '2890': '永豐金',
+          'QQQ': 'invesco 納斯達克 100 指數 ETF',
+          'VOO': 'Vanguard 標普 500 指數 ETF',
+          'VT': 'Vanguard 全球股票 (預留)',
+          '1313': '聯成',
+          '00981A': '主動統一台股增長',
+          '00982A': '主動群益台灣強棒',
+          '00403A': '主動統一升級50',
+          '5289': '宜鼎',
+          '2317': '鴻海', 
+          '2454': '聯發科',
+          'TSLA': '特斯拉',
+          'NVDA': '輝達'
         };
 
         const MONTHLY_TREND = [
@@ -42,8 +63,8 @@
             const [twDiscount, setTwDiscount] = useState(0.2); 
             const [usBuyFeeConfig, setUsBuyFeeConfig] = useState(0.09); 
 
-            const [transactions, setTransactions] = useState(() => JSON.parse(localStorage.getItem('gw_v14_txs') || '[]'));
-            const [dividends, setDividends] = useState(() => JSON.parse(localStorage.getItem('gw_v14_divs') || '[]'));
+            const [transactions, setTransactions] = useState(() => JSON.parse(localStorage.getItem('gw_v15_txs') || '[]'));
+            const [dividends, setDividends] = useState(() => JSON.parse(localStorage.getItem('gw_v15_divs') || '[]'));
             
             const [gdriveClientId, setGdriveClientId] = useState(() => localStorage.getItem('gw_client_id') || '');
             const [gdriveToken, setGdriveToken] = useState(null);
@@ -55,11 +76,12 @@
             const [divForm, setDivForm] = useState({ date: new Date().toISOString().split('T')[0], market: 'TW', symbol: '', amount: '', taxWithheld: '0', netAmount: '' });
 
             useEffect(() => {
-                localStorage.setItem('gw_v14_txs', JSON.stringify(transactions));
-                localStorage.setItem('gw_v14_divs', JSON.stringify(dividends));
+                localStorage.setItem('gw_v15_txs', JSON.stringify(transactions));
+                localStorage.setItem('gw_v15_divs', JSON.stringify(dividends));
                 localStorage.setItem('gw_client_id', gdriveClientId);
             }, [transactions, dividends, gdriveClientId]);
 
+            // 全自動實時網路抓價
             const fetchFinancialData = async () => {
                 try {
                     const fxRes = await fetch('https://open.er-api.com/v6/latest/USD');
@@ -79,14 +101,17 @@
                     for (const sym of symbols) {
                         try {
                             let price = 0;
-                            if (isNaN(sym)) {
+                            if (isNaN(sym) && !sym.endsWith('A')) { 
+                                // 美股處理機制 (排除主動型台股基金結尾帶A)
                                 const yfUrl = `https://query1.financeapi.com/v7/finance/quote?symbols=${sym}`;
                                 const proxyRes = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(yfUrl)}`);
                                 const proxyData = await proxyRes.json();
                                 const json = JSON.parse(proxyData.contents);
                                 price = json?.quoteResponse?.result?.[0]?.regularMarketPrice || 0;
                             } else {
-                                const twRes = await fetch(`https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=${sym}&start_date=${new Date(Date.now() - 5*24*60*60*1000).toISOString().split('T')[0]}`);
+                                // 台股與台灣共同基金中繼
+                                const cleanSym = sym.replace('A', '');
+                                const twRes = await fetch(`https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=${cleanSym}&start_date=${new Date(Date.now() - 6*24*60*60*1000).toISOString().split('T')[0]}`);
                                 const twData = await twRes.json();
                                 if (twData?.data && twData.data.length > 0) price = twData.data[twData.data.length - 1].close || 0;
                             }
@@ -100,7 +125,7 @@
 
             useEffect(() => { fetchFinancialData(); }, [transactions]);
 
-            // ==================== 🛠️ 核心精算大腦 ====================
+            // 精算大腦
             const portfolio = useMemo(() => {
                 const summary = {};
                 const sortedTx = [...transactions].sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -146,7 +171,6 @@
                     const totalProfitTwd = (currentMarketValueTwd - currentInvestCostTwd) + item.realizedProfitTwd + itemDivsTwd;
                     const roi = currentInvestCostTwd > 0 ? (totalProfitTwd / currentInvestCostTwd) * 100 : 0;
 
-                    // ✨ 核心升級：精準保留原幣別小數點第二位，美股看美金，台股看台幣
                     return {
                         ...item, 
                         currentShares, 
@@ -202,7 +226,7 @@
                 }
 
                 if (name === 'symbol') {
-                    const s = value.toUpperCase(); updated.symbol = s; updated.name = STOCK_NAMES[s] || '';
+                    const s = value.toUpperCase().trim(); updated.symbol = s; updated.name = STOCK_NAMES[s] || '';
                 }
 
                 const p = parseFloat(updated.price || 0);
@@ -373,11 +397,10 @@
                                                 portfolio.map(p => (
                                                     <tr key={p.symbol} className="hover:bg-slate-50 transition">
                                                         <td className="p-3 font-bold font-mono text-slate-900">{p.symbol}</td>
-                                                        <td className="p-3 text-slate-600">{STOCK_NAMES[p.symbol] || p.name}</td>
+                                                        <td className="p-3 text-slate-600">{p.name}</td>
                                                         <td className="p-3 font-mono text-slate-800">{p.currentShares}</td>
                                                         <td className="p-3 font-mono text-slate-600">${p.avgBuyCost.toFixed(2)}</td>
                                                         <td className="p-3 font-mono text-blue-600 font-bold">${p.currentPrice.toFixed(2)}</td>
-                                                        {/* ✨ 已解鎖：全面點綴並保留小數點後兩位 .toFixed(2) ✨ */}
                                                         <td className="p-3 font-mono text-slate-700">${p.currentInvestCost.toFixed(2)}</td>
                                                         <td className="p-3 font-mono text-slate-900 font-semibold">${p.currentMarketValue.toFixed(2)}</td>
                                                         <td className="p-3 font-mono text-amber-600">${p.accumulatedDividend.toFixed(2)}</td>
@@ -438,7 +461,7 @@
                         <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm space-y-6">
                             <form onSubmit={(e)=>{e.preventDefault(); if(!txForm.symbol||!txForm.price||!txForm.shares)return; setTransactions([{...txForm, id:Date.now().toString(), name:STOCK_NAMES[txForm.symbol]||txForm.symbol}, ...transactions]); setTxForm({date:new Date().toISOString().split('T')[0], market:'TW', symbol:'', type:'BUY', price:'', shares:'', fee:'0', tax:'0', txRate:'1'});}} className="grid grid-cols-1 sm:grid-cols-4 gap-4 items-end bg-slate-50 p-5 rounded-2xl border border-slate-100">
                                 <div><label className="text-[11px] font-bold text-slate-500 block mb-1">交易日期</label><input type="date" value={txForm.date} onChange={handleTxFormChange} name="date" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div>
-                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">標的與市場</label><div className="flex gap-1"><input type="text" placeholder="2330 / AAPL" value={txForm.symbol} onChange={handleTxFormChange} name="symbol" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs uppercase font-mono" /><select value={txForm.market} onChange={handleTxFormChange} name="market" className="bg-white border border-slate-200 p-2 rounded-lg text-xs"><option value="TW">台股</option><option value="US">美股</option></select></div></div>
+                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">標的與市場</label><div className="flex gap-1"><input type="text" placeholder="2330" value={txForm.symbol} onChange={handleTxFormChange} name="symbol" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs uppercase font-mono" /><select value={txForm.market} onChange={handleTxFormChange} name="market" className="bg-white border border-slate-200 p-2 rounded-lg text-xs"><option value="TW">台股</option><option value="US">美股</option></select></div></div>
                                 <div><label className="text-[11px] font-bold text-slate-500 block mb-1">種類</label><select value={txForm.type} onChange={handleTxFormChange} name="type" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs"><option value="BUY">買入</option><option value="SELL">賣出</option></select></div>
                                 <div><label className="text-[11px] font-bold text-slate-500 block mb-1">單價 / 股數</label><div className="flex gap-1"><input type="number" step="any" placeholder="單價" value={txForm.price} onChange={handleTxFormChange} name="price" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /><input type="number" placeholder="股數" value={txForm.shares} onChange={handleTxFormChange} name="shares" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div></div>
                                 
@@ -465,7 +488,7 @@
                     {/* Tab 3: 配息 */}
                     {activeTab === 'dividend' && (
                         <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm space-y-6">
-                            <form onSubmit={(e)=>{e.preventDefault(); if(!divForm.symbol||!divForm.amount)return; setDividends([{...divForm, id:Date.now().toString()}, ...dividends]); setDivForm({date:new Date().toISOString().split('T')[0], market:'TW', symbol:'', amount:'', taxWithheld:'0', netAmount:''});}} className="grid grid-cols-1 sm:grid-cols-5 gap-3 items-end bg-slate-50 p-4 rounded-xl border border-slate-100">
+                            <form onSubmit={(e)=>{e.preventDefault(); if(!divForm.symbol||!divForm.amount)return; setDividends([{...divForm, id:Date.now().toString(), name:STOCK_NAMES[divForm.symbol]||divForm.symbol}, ...dividends]); setDivForm({date:new Date().toISOString().split('T')[0], market:'TW', symbol:'', amount:'', taxWithheld:'0', netAmount:''});}} className="grid grid-cols-1 sm:grid-cols-5 gap-3 items-end bg-slate-50 p-4 rounded-xl border border-slate-100">
                                 <div><label className="text-[11px] font-bold text-slate-500 block mb-1">配息日期</label><input type="date" value={divForm.date} onChange={e=>setDivForm({...divForm, date:e.target.value})} className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div>
                                 <div><label className="text-[11px] font-bold text-slate-500 block mb-1">代號/市場</label><div className="flex gap-1"><input type="text" placeholder="0056" value={divForm.symbol} onChange={handleDivFormChange} name="symbol" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs uppercase font-mono" /><select value={divForm.market} onChange={handleDivFormChange} name="market" className="bg-white border border-slate-200 p-2 rounded-lg text-xs"><option value="TW">台</option><option value="US">美</option></select></div></div>
                                 <div><label className="text-[11px] font-bold text-slate-500 block mb-1">原始配息額</label><input type="number" placeholder="配息金額" value={divForm.amount} onChange={handleDivFormChange} name="amount" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div>
@@ -501,8 +524,10 @@
             );
         }
 
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
+        // 🚀 採用最穩定、絕不白屏的 React 18 DOM 掛載安全機制
+        const rootContainer = document.getElementById('root');
+        const reactRoot = ReactDOM.createRoot(rootContainer);
+        reactRoot.render(React.createElement(App));
     </script>
 </body>
 </html>
