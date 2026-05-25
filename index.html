@@ -37,11 +37,9 @@
             const [currency, setCurrency] = useState('TWD');
             const [exchangeRate, setExchangeRate] = useState(31.2); 
             
-            // 核心資料狀態
             const [transactions, setTransactions] = useState(() => JSON.parse(localStorage.getItem('gw_v8_txs') || '[]'));
             const [dividends, setDividends] = useState(() => JSON.parse(localStorage.getItem('gw_v8_divs') || '[]'));
             
-            // Google Drive 同步核心狀態
             const [gdriveClientId, setGdriveClientId] = useState(() => localStorage.getItem('gw_client_id') || '');
             const [gdriveToken, setGdriveToken] = useState(null);
             const [gdriveUser, setGdriveUser] = useState(null);
@@ -57,7 +55,6 @@
                 localStorage.setItem('gw_client_id', gdriveClientId);
             }, [transactions, dividends, gdriveClientId]);
 
-            // 資產精算計算
             const portfolio = useMemo(() => {
                 const summary = {};
                 transactions.forEach(tx => {
@@ -112,10 +109,8 @@
                 setDivForm(updated);
             };
 
-            // ==================== ☁️ GOOGLE DRIVE 雲端雙向同步水管 ====================
             const handleGoogleLogin = () => {
                 if (!gdriveClientId) return alert("請先填寫 Google Client ID");
-                
                 const client = window.google.accounts.oauth2.initTokenClient({
                     client_id: gdriveClientId,
                     scope: 'https://www.googleapis.com/auth/drive.file',
@@ -123,9 +118,7 @@
                     callback: async (res) => {
                         if (res.access_token) {
                             setGdriveToken(res.access_token);
-                            setSyncStatus('雲端模式'); // 🎉 成功授權後，切換模式狀態！
-                            
-                            // 撈取使用者資訊
+                            setSyncStatus('雲端模式');
                             fetch('https://www.googleapis.com/oauth2/v3/userinfo', { 
                                 headers: { Authorization: `Bearer ${res.access_token}` }
                             })
@@ -138,7 +131,6 @@
                 client.requestAccessToken();
             };
 
-            // 1. 備份到雲端硬碟
             const uploadToCloud = async () => {
                 if (!gdriveToken) return alert("請先完成授權登入！");
                 setIsSyncing(true);
@@ -146,7 +138,6 @@
                     const backupData = { transactions, dividends, updatedAt: new Date().toISOString() };
                     const metadata = { name: 'glowwealth_family_portfolio.json', mimeType: 'application/json' };
 
-                    // 先搜尋雲端有沒有舊備份
                     const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=name='glowwealth_family_portfolio.json' and trashed=false`, {
                         headers: { Authorization: `Bearer ${gdriveToken}` }
                     });
@@ -178,7 +169,6 @@
                 } finally { setIsSyncing(false); }
             };
 
-            // 2. 從雲端硬碟下載還原
             const downloadFromCloud = async () => {
                 if (!gdriveToken) return alert("請先完成授權登入！");
                 setIsSyncing(true);
@@ -224,7 +214,11 @@
                                 {syncStatus} {gdriveUser && `(${gdriveUser.name})`}
                             </span>
                             <button onClick={() => alert(JSON.stringify({transactions, dividends}, null, 2))} className="bg-white border border-slate-200 hover:bg-slate-50 px-4 py-1.5 rounded-xl text-xs font-bold shadow-sm text-slate-700 transition">匯出 JSON</button>
-                            <button onClick={() => setActiveTab('ledger')} className="bg-cyan-850 hover:bg-cyan-800 text-white px-4 py-1.5 rounded-xl text-xs font-bold shadow-md transition">＋ 新增紀錄</button>
+                            
+                            {/* ✨ 修正後的關鍵按鈕顏色：高亮白字 text-white，Hover 略微亮起 bg-cyan-750 ✨ */}
+                            <button onClick={() => setActiveTab('ledger')} className="bg-cyan-850 hover:bg-cyan-700 text-white px-4 py-1.5 rounded-xl text-xs font-bold shadow-md transition flex items-center gap-1">
+                                <span>＋ 新增紀錄</span>
+                            </button>
                         </div>
                     </div>
 
@@ -335,7 +329,7 @@
                             </form>
                             <table className="w-full text-left text-sm">
                                 <thead><tr className="text-slate-400 text-xs border-b"><th>發放日</th><th>標的</th><th>市場</th><th>總配息</th><th>扣繳稅</th><th>入帳淨額</th><th>操作</th></tr></thead>
-                                <tbody className="divide-y">
+                                <tbody>
                                     {dividends.map(d => (
                                         <tr key={d.id} className="hover:bg-slate-50 text-slate-700">
                                             <td className="py-3 text-xs font-mono text-slate-400">{d.date}</td><td className="py-3 font-bold">{d.symbol}</td><td className="text-xs">{d.market === 'TW' ? '🇹🇼 台股' : '🇺🇸 美股'}</td><td className="py-3 font-mono text-slate-500">${d.amount}</td><td className="py-3 font-mono text-rose-500">-${d.taxWithheld}</td><td className="py-3 font-mono font-bold text-emerald-600">${d.netAmount}</td><td><button onClick={()=>setDividends(dividends.filter(x=>x.id!==d.id))} className="text-slate-300 hover:text-rose-500">🗑️</button></td>
@@ -353,7 +347,6 @@
                             <input type="text" placeholder="貼上 Client ID" value={gdriveClientId} onChange={e=>setGdriveClientId(e.target.value)} className="w-full bg-slate-50 border border-slate-200 p-3 rounded-xl text-xs font-mono"/>
                             <button onClick={handleGoogleLogin} className="w-full bg-slate-900 text-white font-bold py-2.5 rounded-xl text-sm transition hover:bg-slate-800 flex items-center justify-center gap-2">🔑 授權登入 Google Drive</button>
                             
-                            {/* ✨ 加載進度與雙向傳輸按權按鈕 ✨ */}
                             <div className="grid grid-cols-2 gap-3 pt-3 border-t border-slate-100">
                                 <button onClick={uploadToCloud} disabled={!gdriveToken || isSyncing} className="bg-cyan-850 hover:bg-cyan-800 disabled:opacity-40 text-white text-xs font-bold py-2 rounded-xl transition shadow-sm">
                                     {isSyncing ? '同步中...' : '📤 備份至雲端硬碟'}
