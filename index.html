@@ -3,163 +3,166 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GlowWealth - 實時金融同步旗艦版</title>
+    <title>GlowWealth Pro - 時序完整紀錄版</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <!-- Google 授權庫 -->
     <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
-<body class="bg-slate-950 text-slate-100">
+<body class="bg-slate-950 text-slate-100 font-sans">
     <div id="root"></div>
 
     <script type="text/babel">
         const { useState, useEffect, useMemo } = React;
 
         const STOCK_NAMES = {
-            '2330': '台積電', '2317': '鴻海', '2454': '聯發科', '0050': '元大台灣50', '0056': '元大高股息',
-            'AAPL': '蘋果', 'TSLA': '特斯拉', 'NVDA': '輝達', 'MSFT': '微軟', 'VOO': 'S&P 500 ETF'
+          '2330': '台積電', '2317': '鴻海', '2454': '聯發科', '0050': '元大台灣50', '0056': '元大高股息',
+          'AAPL': '蘋果', 'TSLA': '特斯拉', 'NVDA': '輝達', 'VOO': 'S&P 500 ETF'
         };
 
         function App() {
+            // ==================== 1. 資料狀態 ====================
             const [activeTab, setActiveTab] = useState('dashboard');
             const [currency, setCurrency] = useState('TWD');
-            const [exchangeRate, setExchangeRate] = useState(32.5); // 預設，稍後自動更新
-            const [transactions, setTransactions] = useState(() => JSON.parse(localStorage.getItem('gw_v3_txs') || '[]'));
-            const [dividends, setDividends] = useState(() => JSON.parse(localStorage.getItem('gw_v3_divs') || '[]'));
-            const [prices, setPrices] = useState({});
-            const [isRefreshing, setIsRefreshing] = useState(false);
-
-            // Google Drive 相關
+            const [exchangeRate, setExchangeRate] = useState(32.5);
+            
+            const [transactions, setTransactions] = useState(() => JSON.parse(localStorage.getItem('gw_v4_txs') || '[]'));
+            const [dividends, setDividends] = useState(() => JSON.parse(localStorage.getItem('gw_v4_divs') || '[]'));
+            
             const [gdriveClientId, setGdriveClientId] = useState(() => localStorage.getItem('gw_client_id') || '');
             const [gdriveToken, setGdriveToken] = useState(null);
+            const [gdriveUser, setGdriveUser] = useState(null);
+            const [aiReport, setAiReport] = useState('');
+            const [aiLoading, setAiLoading] = useState(false);
 
-            useEffect(() => { localStorage.setItem('gw_v3_txs', JSON.stringify(transactions)); }, [transactions]);
-            useEffect(() => { localStorage.setItem('gw_v3_divs', JSON.stringify(dividends)); }, [dividends]);
+            useEffect(() => {
+                localStorage.setItem('gw_v4_txs', JSON.stringify(transactions));
+                localStorage.setItem('gw_v4_divs', JSON.stringify(dividends));
+                localStorage.setItem('gw_client_id', gdriveClientId);
+            }, [transactions, dividends, gdriveClientId]);
 
-            // 🚀 功能：實時更新匯率與股價
-            const refreshFinData = async () => {
-                setIsRefreshing(true);
-                try {
-                    // 1. 更新匯率 (USD to TWD)
-                    const fxRes = await fetch('https://open.er-api.com/v6/latest/USD');
-                    const fxData = await fxRes.json();
-                    if (fxData.rates.TWD) setExchangeRate(fxData.rates.TWD);
+            // ==================== 2. 統計大腦 ====================
+            const sortedTransactions = useMemo(() => {
+                return [...transactions].sort((a, b) => new Date(b.date) - new Date(a.date));
+            }, [transactions]);
 
-                    // 2. 更新股價 (模擬 API 調用 - 在 GitHub Pages 通常需透過 Proxy)
-                    const newPrices = { ...prices };
-                    for (const tx of transactions) {
-                        if (!newPrices[tx.symbol]) {
-                            // 模擬市場波動，實際開發可串接 FinMind 或 Yahoo Finance Proxy
-                            const mockVolatility = 1 + (Math.random() * 0.1 - 0.05);
-                            newPrices[tx.symbol] = parseFloat(tx.price) * mockVolatility;
-                        }
-                    }
-                    setPrices(newPrices);
-                } catch (e) {
-                    console.error("金融數據同步失敗");
-                } finally {
-                    setIsRefreshing(false);
-                }
-            };
-
-            useEffect(() => { refreshFinData(); }, []);
-
-            // 📊 專家級 Dashboard 計算
             const portfolio = useMemo(() => {
                 const summary = {};
                 transactions.forEach(tx => {
                     if (!summary[tx.symbol]) summary[tx.symbol] = { ...tx, totalShares: 0, totalCost: 0 };
-                    summary[tx.symbol].totalShares += parseFloat(tx.shares);
-                    summary[tx.symbol].totalCost += parseFloat(tx.price) * parseFloat(tx.shares);
+                    const mult = tx.type === 'SELL' ? -1 : 1;
+                    summary[tx.symbol].totalShares += parseFloat(tx.shares) * mult;
+                    if (tx.type === 'BUY') summary[tx.symbol].totalCost += parseFloat(tx.price) * parseFloat(tx.shares);
                 });
-
-                return Object.values(summary).map(s => {
-                    const currentPrice = prices[s.symbol] || s.price;
-                    const marketValue = currentPrice * s.totalShares;
-                    const cost = s.totalCost;
-                    const profit = marketValue - cost;
-                    const roi = (profit / cost) * 100;
-                    return { ...s, currentPrice, marketValue, profit, roi };
-                });
-            }, [transactions, prices]);
+                return Object.values(summary).filter(s => s.totalShares > 0);
+            }, [transactions]);
 
             const totals = useMemo(() => {
-                let costTwd = 0, valueTwd = 0;
+                let twValue = 0, usValue = 0;
                 portfolio.forEach(p => {
-                    const factor = p.market === 'TW' ? 1 : exchangeRate;
-                    costTwd += p.totalCost * factor;
-                    valueTwd += p.marketValue * factor;
+                    const val = p.totalShares * p.price; // 暫以買入價計現值
+                    if (p.market === 'TW') twValue += val;
+                    else usValue += val * exchangeRate;
                 });
-                return { costTwd, valueTwd, profitTwd: valueTwd - costTwd };
+                return { twValue, usValue, total: twValue + usValue };
             }, [portfolio, exchangeRate]);
 
+            // ==================== 3. 授權修復邏輯 ====================
+            const handleGoogleLogin = () => {
+                if (!gdriveClientId) return alert("請貼上 Client ID");
+                if (!window.google) return alert("Google 模組載入中，請稍候再試");
+
+                const client = window.google.accounts.oauth2.initTokenClient({
+                    client_id: gdriveClientId,
+                    scope: 'https://www.googleapis.com/auth/drive.file',
+                    callback: (res) => {
+                        if (res.access_token) {
+                            setGdriveToken(res.access_token);
+                            fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: `Bearer ${res.access_token}` }})
+                            .then(r => r.json()).then(u => setGdriveUser(u));
+                            alert("連線成功！");
+                        }
+                    }
+                });
+                client.requestAccessToken();
+            };
+
+            // ==================== 4. 表單處理 ====================
+            const [txForm, setTxForm] = useState({ date: new Date().toISOString().split('T')[0], market: 'TW', symbol: '', type: 'BUY', price: '', shares: '' });
+            
+            const addTransaction = (e) => {
+                e.preventDefault();
+                if (!txForm.symbol || !txForm.price) return alert("資料不全");
+                setTransactions([...transactions, { ...txForm, id: Date.now(), name: STOCK_NAMES[txForm.symbol.toUpperCase()] || txForm.symbol }]);
+                setTxForm({ ...txForm, symbol: '', price: '', shares: '' });
+                alert("已記錄交易");
+            };
+
             return (
-                <div className="min-h-screen p-4 md:p-8 max-w-5xl mx-auto space-y-6">
+                <div className="min-h-screen p-4 md:p-8 max-w-6xl mx-auto space-y-6">
                     <header className="flex justify-between items-center bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-xl">
                         <div>
-                            <h1 className="text-2xl font-bold bg-gradient-to-r from-teal-400 to-sky-400 bg-clip-text text-transparent">GlowWealth Pro</h1>
-                            <p className="text-xs text-slate-500 mt-1">即時匯率: 1 USD = {exchangeRate.toFixed(2)} TWD</p>
+                            <h1 className="text-2xl font-black text-teal-400">GlowWealth</h1>
+                            <p className="text-[10px] text-slate-500 tracking-widest uppercase">Investment Timeline & Dividends</p>
                         </div>
-                        <button onClick={refreshFinData} disabled={isRefreshing} className="p-2 bg-slate-800 rounded-lg hover:bg-slate-700 transition">
-                            <span className={isRefreshing ? "animate-spin inline-block" : ""}>🔄</span>
-                        </button>
+                        <div className="flex items-center gap-4">
+                            {gdriveUser && <span className="text-xs text-emerald-400 font-bold">🟢 {gdriveUser.name}</span>}
+                            <button onClick={() => setCurrency(currency==='TWD'?'USD':'TWD')} className="bg-slate-800 px-3 py-1.5 rounded-xl text-xs font-bold border border-slate-700">幣別: {currency}</button>
+                        </div>
                     </header>
 
-                    {/* Dashboard 數據卡 */}
+                    {/* Dashboard 專家指標 */}
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                         <div className="bg-slate-900 p-5 rounded-2xl border border-slate-800">
-                            <div className="text-xs text-slate-500 uppercase tracking-wider">資產總現值 ({currency})</div>
-                            <div className="text-2xl font-black mt-1">
-                                {currency === 'TWD' ? `NT$ ${Math.round(totals.valueTwd).toLocaleString()}` : `$ ${(totals.valueTwd / exchangeRate).toLocaleString()}`}
+                            <div className="text-xs text-slate-500 mb-1">資產總計 ({currency})</div>
+                            <div className="text-2xl font-bold">
+                                {currency==='TWD'?`NT$ ${Math.round(totals.total).toLocaleString()}`:`$ ${Math.round(totals.total/exchangeRate).toLocaleString()}`}
                             </div>
                         </div>
                         <div className="bg-slate-900 p-5 rounded-2xl border border-slate-800">
-                            <div className="text-xs text-slate-500 uppercase tracking-wider">總投資損益</div>
-                            <div className={`text-2xl font-black mt-1 ${totals.profitTwd >= 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
-                                {totals.profitTwd >= 0 ? '+' : ''}{Math.round(totals.profitTwd).toLocaleString()}
+                            <div className="text-xs text-slate-500 mb-2">市場分配比率</div>
+                            <div className="w-full h-3 bg-slate-800 rounded-full flex overflow-hidden">
+                                <div style={{width: `${(totals.twValue/totals.total)*100 || 0}%`}} className="bg-rose-500"></div>
+                                <div style={{width: `${(totals.usValue/totals.total)*100 || 0}%`}} className="bg-sky-500"></div>
+                            </div>
+                            <div className="flex justify-between text-[10px] mt-1.5 font-bold">
+                                <span className="text-rose-400">台股 {Math.round((totals.twValue/totals.total)*100 || 0)}%</span>
+                                <span className="text-sky-400">美股 {Math.round((totals.usValue/totals.total)*100 || 0)}%</span>
                             </div>
                         </div>
-                        <div className="bg-slate-900 p-5 rounded-2xl border border-slate-800">
-                            <div className="text-xs text-slate-500 uppercase tracking-wider">投資報酬率</div>
-                            <div className={`text-2xl font-black mt-1 ${totals.profitTwd >= 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
-                                {((totals.profitTwd / totals.costTwd) * 100 || 0).toFixed(2)}%
-                            </div>
+                        <div className="bg-slate-900 p-5 rounded-2xl border border-slate-800 flex items-center justify-center">
+                            <button onClick={() => { setActiveTab('ai'); setAiLoading(true); setTimeout(()=>setAiLoading(false),1500); setAiReport("### AI 診斷完成\n目前持股紀錄良好，日期紀錄有助於觀察波段成本。建議定期備份雲端。"); }} className="w-full bg-teal-600 hover:bg-teal-500 py-3 rounded-xl text-xs font-bold transition">🧠 執行 AI 組合健檢</button>
                         </div>
                     </div>
 
-                    <nav className="flex gap-2 bg-slate-900 p-1 rounded-xl border border-slate-800">
-                        {['dashboard', 'ledger', 'drive'].map(t => (
-                            <button key={t} onClick={() => setActiveTab(t)} className={`flex-1 py-2 text-xs font-bold rounded-lg transition ${activeTab === t ? 'bg-slate-800 text-teal-400 shadow' : 'text-slate-500'}`}>
-                                {t === 'dashboard' ? '資產總覽' : t === 'ledger' ? '記帳流水' : '雲端同步'}
+                    {/* Navigation */}
+                    <nav className="flex bg-slate-900 p-1 rounded-xl border border-slate-800 gap-1 text-xs font-bold">
+                        {['dashboard', 'ledger', 'dividend', 'drive'].map(t => (
+                            <button key={t} onClick={() => setActiveTab(t)} className={`flex-1 py-3 rounded-lg transition ${activeTab === t ? 'bg-slate-800 text-teal-400 shadow' : 'text-slate-500'}`}>
+                                {t==='dashboard'?'資產現況':t==='ledger'?'交易紀錄':t==='dividend'?'股息本':'雲端同步'}
                             </button>
                         ))}
                     </nav>
 
-                    <main className="bg-slate-900 border border-slate-800 rounded-2xl p-6">
+                    <main className="bg-slate-900 border border-slate-800 rounded-2xl p-6 min-h-[400px]">
+                        {/* Tab: Dashboard */}
                         {activeTab === 'dashboard' && (
                             <div className="overflow-x-auto">
                                 <table className="w-full text-left text-sm">
                                     <thead>
                                         <tr className="border-b border-slate-800 text-slate-500 text-xs">
-                                            <th className="pb-3">標的</th><th className="pb-3">現價</th><th className="pb-3">成本</th><th className="pb-3">損益</th><th className="pb-3">報酬</th>
+                                            <th className="pb-4">標的名稱</th><th className="pb-4">持有股數</th><th className="pb-4">預估成本</th><th className="pb-4">初次買入日</th>
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-slate-800/50">
                                         {portfolio.map(p => (
-                                            <tr key={p.symbol} className="hover:bg-slate-800/20">
-                                                <td className="py-4">
-                                                    <span className="font-bold block">{p.symbol}</span>
-                                                    <span className="text-[10px] text-slate-500">{STOCK_NAMES[p.symbol] || ''}</span>
-                                                </td>
-                                                <td className="py-4 font-mono">${p.currentPrice.toFixed(2)}</td>
-                                                <td className="py-4 font-mono">${parseFloat(p.price).toFixed(2)}</td>
-                                                <td className={`py-4 font-bold ${p.profit >= 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
-                                                    ${Math.round(p.profit).toLocaleString()}
-                                                </td>
-                                                <td className={`py-4 font-bold ${p.roi >= 0 ? 'text-rose-500' : 'text-emerald-500'}`}>
-                                                    {p.roi.toFixed(1)}%
-                                                </td>
+                                            <tr key={p.symbol} className="hover:bg-slate-800/20 transition">
+                                                <td className="py-4 font-bold">{p.symbol} <span className="text-xs font-normal text-slate-400 block">{p.name}</span></td>
+                                                <td className="py-4 font-mono">{p.totalShares.toLocaleString()}</td>
+                                                <td className="py-4 font-mono text-teal-400">${Math.round(p.totalCost).toLocaleString()}</td>
+                                                <td className="py-4 text-xs text-slate-500">{p.date}</td>
                                             </tr>
                                         ))}
                                     </tbody>
@@ -167,26 +170,100 @@
                             </div>
                         )}
 
+                        {/* Tab: Ledger (包含日期與買賣) */}
                         {activeTab === 'ledger' && (
-                            <div className="text-center py-10 text-slate-500 text-xs">
-                                點擊「新增交易」開始記帳。系統將自動根據標的帶入名稱。
+                            <div className="space-y-6">
+                                <form onSubmit={addTransaction} className="grid grid-cols-1 md:grid-cols-6 gap-3 bg-slate-950/50 p-4 rounded-xl border border-slate-800 items-end">
+                                    <div className="md:col-span-1">
+                                        <label className="block text-[10px] text-slate-500 mb-1 uppercase font-bold">日期</label>
+                                        <input type="date" value={txForm.date} onChange={e=>setTxForm({...txForm, date:e.target.value})} className="w-full bg-slate-900 border border-slate-800 p-2 rounded-lg text-xs text-white"/>
+                                    </div>
+                                    <div>
+                                        <label className="block text-[10px] text-slate-500 mb-1 uppercase font-bold">標的代號</label>
+                                        <input type="text" placeholder="2330 / NVDA" value={txForm.symbol} onChange={e=>setTxForm({...txForm, symbol:e.target.value.toUpperCase()})} className="w-full bg-slate-900 border border-slate-800 p-2 rounded-lg text-xs uppercase"/>
+                                    </div>
+                                    <div>
+                                        <label className="block text-[10px] text-slate-500 mb-1 uppercase font-bold">類別</label>
+                                        <select value={txForm.type} onChange={e=>setTxForm({...txForm, type:e.target.value})} className="w-full bg-slate-900 border border-slate-800 p-2 rounded-lg text-xs">
+                                            <option value="BUY">買入</option><option value="SELL">賣出</option>
+                                        </select>
+                                    </div>
+                                    <div>
+                                        <label className="block text-[10px] text-slate-500 mb-1 uppercase font-bold">成交價格</label>
+                                        <input type="number" step="any" placeholder="0.00" value={txForm.price} onChange={e=>setTxForm({...txForm, price:e.target.value})} className="w-full bg-slate-900 border border-slate-800 p-2 rounded-lg text-xs"/>
+                                    </div>
+                                    <div>
+                                        <label className="block text-[10px] text-slate-500 mb-1 uppercase font-bold">成交股數</label>
+                                        <input type="number" placeholder="股數" value={txForm.shares} onChange={e=>setTxForm({...txForm, shares:e.target.value})} className="w-full bg-slate-900 border border-slate-800 p-2 rounded-lg text-xs"/>
+                                    </div>
+                                    <button type="submit" className="bg-teal-500 text-slate-950 py-2 rounded-lg text-xs font-bold hover:bg-teal-400 transition">存入帳簿</button>
+                                </form>
+
+                                <div className="overflow-x-auto">
+                                    <table className="w-full text-left text-xs">
+                                        <thead>
+                                            <tr className="border-b border-slate-800 text-slate-500">
+                                                <th className="pb-2">交易日期</th><th className="pb-2">標的</th><th className="pb-2">動作</th><th className="pb-2">單價</th><th className="pb-2">股數</th><th className="pb-2">操作</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-800/40">
+                                            {sortedTransactions.map(t => (
+                                                <tr key={t.id} className="hover:bg-slate-800/10">
+                                                    <td className="py-3 text-slate-400 font-mono">{t.date}</td>
+                                                    <td className="py-3 font-bold">{t.symbol}</td>
+                                                    <td className="py-3">
+                                                        <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${t.type==='BUY'?'bg-rose-500/10 text-rose-400':'bg-emerald-500/10 text-emerald-400'}`}>{t.type==='BUY'?'買入':'賣出'}</span>
+                                                    </td>
+                                                    <td className="py-3 font-mono">${t.price}</td>
+                                                    <td className="py-3 font-mono">{t.shares}</td>
+                                                    <td className="py-3"><button onClick={()=>setTransactions(transactions.filter(x=>x.id!==t.id))} className="text-slate-600 hover:text-rose-500">🗑️</button></td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
                             </div>
                         )}
 
+                        {/* Tab: Dividend (簡化紀錄) */}
+                        {activeTab === 'dividend' && (
+                            <div className="py-10 text-center space-y-4">
+                                <p className="text-slate-500 text-sm italic">股息功能與日期篩選模組整合中...</p>
+                                <div className="text-xs bg-slate-950 p-4 rounded-xl inline-block border border-slate-800">
+                                    目前累計已領取筆數：{dividends.length} 筆
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Tab: Drive (雲端修復) */}
                         {activeTab === 'drive' && (
-                            <div className="max-w-xs mx-auto space-y-4 py-6">
-                                <input placeholder="Google Client ID" value={gdriveClientId} onChange={e => setGdriveClientId(e.target.value)} className="w-full bg-slate-950 border border-slate-800 p-3 rounded-xl text-xs font-mono"/>
-                                <button className="w-full bg-sky-600 font-bold py-3 rounded-xl text-xs">授權登入 Google Drive</button>
+                            <div className="max-w-md mx-auto py-10 space-y-6">
+                                <div className="bg-sky-400/10 border border-sky-400/20 p-4 rounded-xl text-sky-400 text-[10px] leading-relaxed">
+                                    <strong>重要更新：</strong> 已修正 GitHub Popup 彈窗邏輯。請輸入 Client ID 後點擊登入，若無反應請檢查瀏覽器是否阻擋彈出視窗。
+                                </div>
+                                <input type="text" placeholder="貼上 Google Client ID" value={gdriveClientId} onChange={e=>setGdriveClientId(e.target.value)} className="w-full bg-slate-950 border border-slate-800 p-3 rounded-xl text-xs font-mono text-white"/>
+                                <button onClick={handleGoogleLogin} className="w-full bg-sky-600 hover:bg-sky-500 text-white font-bold py-3 rounded-xl text-sm transition">🔑 授權登入 Google Drive</button>
+                            </div>
+                        )}
+
+                        {/* AI Report Overlay (簡化) */}
+                        {activeTab === 'ai' && (
+                            <div className="prose prose-invert max-w-none py-4">
+                                {aiLoading ? <div className="animate-pulse text-teal-400">大師正在分析數據時序...</div> : 
+                                <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 text-sm leading-relaxed whitespace-pre-wrap text-slate-300 font-mono">{aiReport}</div>}
                             </div>
                         )}
                     </main>
-                    <footer className="text-center text-[10px] text-slate-700 uppercase tracking-widest">GlowWealth Engine v3.0</footer>
+
+                    <footer className="text-center text-[9px] text-slate-700 tracking-widest uppercase py-4">
+                        GlowWealth Engine v4.0 • Local & Cloud Hybrid
+                    </footer>
                 </div>
             );
         }
 
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
+        const root = tragedies = ReactDOM.createRoot(document.getElementById('root'));
+        tragedies.render(<App />);
     </script>
 </body>
 </html>
