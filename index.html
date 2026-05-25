@@ -118,11 +118,14 @@
                                 const json = await proxyRes.json();
                                 price = json?.chart?.result?.[0]?.meta?.regularMarketPrice || 0;
                             } else {
-                                // 台股統一用 Yahoo Finance {代號}.TW，完整支援主動型ETF（如 00982A.TW）
-                                const yfUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}.TW?interval=1d&range=1d`;
-                                const proxyRes = await fetch(`https://corsproxy.io/?${encodeURIComponent(yfUrl)}`);
-                                const json = await proxyRes.json();
-                                price = json?.chart?.result?.[0]?.meta?.regularMarketPrice || 0;
+                                // 台股：先試 .TW（上市），無資料再試 .TWO（上櫃，如 5289 宜鼎）
+                                for (const suffix of ['.TW', '.TWO']) {
+                                    const yfUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}${suffix}?interval=1d&range=1d`;
+                                    const proxyRes = await fetch(`https://corsproxy.io/?${encodeURIComponent(yfUrl)}`);
+                                    const json = await proxyRes.json();
+                                    price = json?.chart?.result?.[0]?.meta?.regularMarketPrice || 0;
+                                    if (price > 0) break;
+                                }
                             }
                             if (price > 0) fetchedPrices[sym] = price;
                         } catch (err) { console.error('Price fetch failed:', sym, err); }
@@ -411,36 +414,17 @@
                     {/* Tab: 總覽 */}
                     {activeTab === 'dashboard' && (
                         <div className="space-y-6">
-                            {/* 台股 summary */}
-                            <div className="bg-sky-50 border border-sky-100 rounded-2xl p-4 space-y-3">
-                                <div className="text-xs font-black text-sky-700 tracking-wide">🇹🇼 台股</div>
-                                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                                    <div className="bg-white rounded-xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">總市值 (NT$)</div><div className="text-lg font-black text-slate-900 mt-1">${Number(stats.twValue||0).toLocaleString(undefined,{maximumFractionDigits:0})}</div></div>
-                                    <div className="bg-white rounded-xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">投入成本 (NT$)</div><div className="text-lg font-black text-slate-700 mt-1">${Number(stats.twCost||0).toLocaleString(undefined,{maximumFractionDigits:0})}</div></div>
-                                    <div className="bg-white rounded-xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">總損益 (NT$)</div><div className={`text-lg font-black mt-1 ${Number(stats.twProfit||0)>=0?'text-rose-600':'text-emerald-600'}`}>{Number(stats.twProfit||0)>=0?'+':''}${Number(stats.twProfit||0).toLocaleString(undefined,{maximumFractionDigits:0})}</div></div>
-                                    <div className="bg-white rounded-xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">報酬率 / 配息(NT$)</div><div className={`text-lg font-black mt-1 ${Number(stats.twRoi||0)>=0?'text-rose-600':'text-emerald-600'}`}>{Number(stats.twRoi||0)>=0?'+':''}{Number(stats.twRoi||0).toFixed(2)}%<span className="text-slate-400 text-xs font-normal ml-2">${Number(stats.twDivIncome||0).toLocaleString(undefined,{maximumFractionDigits:0})}</span></div></div>
-                                </div>
-                            </div>
-
-                            {/* 美股 summary */}
-                            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
-                                <div className="text-xs font-black text-slate-600 tracking-wide">🇺🇸 美股 <span className="font-normal text-slate-400">（全部換算台幣）</span></div>
-                                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                                    <div className="bg-white rounded-xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">總市值 (NT$)</div><div className="text-lg font-black text-slate-900 mt-1">${Number(stats.usValue||0).toLocaleString(undefined,{maximumFractionDigits:0})}</div></div>
-                                    <div className="bg-white rounded-xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">投入成本 (NT$)</div><div className="text-lg font-black text-slate-700 mt-1">${Number(stats.usCost||0).toLocaleString(undefined,{maximumFractionDigits:0})}</div></div>
-                                    <div className="bg-white rounded-xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">總損益 (NT$)</div><div className={`text-lg font-black mt-1 ${Number(stats.usProfit||0)>=0?'text-rose-600':'text-emerald-600'}`}>{Number(stats.usProfit||0)>=0?'+':''}${Number(stats.usProfit||0).toLocaleString(undefined,{maximumFractionDigits:0})}</div></div>
-                                    <div className="bg-white rounded-xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">報酬率 / 配息(NT$)</div><div className={`text-lg font-black mt-1 ${Number(stats.usRoi||0)>=0?'text-rose-600':'text-emerald-600'}`}>{Number(stats.usRoi||0)>=0?'+':''}{Number(stats.usRoi||0).toFixed(2)}%<span className="text-slate-400 text-xs font-normal ml-2">${Number(stats.usDivIncome||0).toLocaleString(undefined,{maximumFractionDigits:0})}</span></div></div>
-                                </div>
-                            </div>
-
-                            {/* 合計 */}
+                            {/* ① 合計四張卡片 */}
                             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-                                <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm md:col-span-1 col-span-2"><div className="text-[10px] font-bold text-slate-400 tracking-wider">合計總資產 (NT$)</div><div className="text-2xl font-black text-slate-900 mt-1">${Number(stats.totalValue||0).toLocaleString(undefined,{maximumFractionDigits:0})}</div></div>
+                                <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm col-span-2 md:col-span-1"><div className="text-[10px] font-bold text-slate-400 tracking-wider">合計總資產 (NT$)</div><div className="text-2xl font-black text-slate-900 mt-1">${Number(stats.totalValue||0).toLocaleString(undefined,{maximumFractionDigits:0})}</div></div>
                                 <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">合計報酬率</div><div className={`text-xl font-black mt-1 ${Number(stats.roi||0)>=0?'text-rose-600':'text-emerald-600'}`}>{Number(stats.roi||0)>=0?'+':''}{Number(stats.roi||0).toFixed(2)}%</div></div>
                                 <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">合計配息收入 (NT$)</div><div className="text-xl font-black text-slate-900 mt-1">${Number(stats.divIncome||0).toLocaleString(undefined,{maximumFractionDigits:0})}</div></div>
                                 <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">台股 / 美股 比重</div><div className="text-base font-black text-slate-700 mt-1">{Number(stats.twWeight||0).toFixed(1)}% / {Number(stats.usWeight||0).toFixed(1)}%</div></div>
                             </div>
 
+                            <hr className="border-slate-200" />
+
+                            {/* ② 台股：卡片 + 列表 */}
                             {(() => {
                                 const theadRow = (
                                     <tr className="border-b border-slate-200 text-slate-500 font-bold bg-slate-50 text-[11px]">
@@ -466,6 +450,54 @@
                                         <td className="p-3 text-center"><span className={`px-2 py-0.5 rounded font-bold ${Number(p.roi||0)>=0?'text-rose-600 bg-rose-50':'text-emerald-600 bg-emerald-50'}`}>{Number(p.roi||0)>=0?'+':''}{Number(p.roi||0).toFixed(2)}%</span></td>
                                     </tr>
                                 );
+                                const renderMarketSection = (mkt) => {
+                                    const mktP = portfolio.filter(p => p.market === mkt);
+                                    if (mktP.length === 0) return null;
+                                    const isTW = mkt === 'TW';
+                                    const mktStats = isTW
+                                        ? { value: stats.twValue, cost: stats.twCost, profit: stats.twProfit, roi: stats.twRoi, div: stats.twDivIncome }
+                                        : { value: stats.usValue, cost: stats.usCost, profit: stats.usProfit, roi: stats.usRoi, div: stats.usDivIncome };
+                                    const sub = mktP.reduce((a, p) => ({
+                                        cost: a.cost+(p.currentInvestCost||0), value: a.value+(p.currentMarketValue||0),
+                                        divs: a.divs+(p.accumulatedDividend||0), realized: a.realized+(p.realizedProfitTwd||0),
+                                        profit: a.profit+(p.totalProfit||0)
+                                    }), {cost:0,value:0,divs:0,realized:0,profit:0});
+                                    const subRoi = sub.cost > 0 ? (sub.profit/sub.cost)*100 : 0;
+                                    return (
+                                        <div key={mkt} className="space-y-4">
+                                            {/* 市場卡片 */}
+                                            <div className={`${isTW?'bg-sky-50 border-sky-100':'bg-slate-50 border-slate-200'} border rounded-2xl p-4 space-y-3`}>
+                                                <div className={`text-xs font-black tracking-wide ${isTW?'text-sky-700':'text-slate-600'}`}>{isTW?'🇹🇼 台股':'🇺🇸 美股'}{!isTW&&<span className="font-normal text-slate-400"> （全部換算台幣）</span>}</div>
+                                                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                                    <div className="bg-white rounded-xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">總市值 (NT$)</div><div className="text-lg font-black text-slate-900 mt-1">${Number(mktStats.value||0).toLocaleString(undefined,{maximumFractionDigits:0})}</div></div>
+                                                    <div className="bg-white rounded-xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">投入成本 (NT$)</div><div className="text-lg font-black text-slate-700 mt-1">${Number(mktStats.cost||0).toLocaleString(undefined,{maximumFractionDigits:0})}</div></div>
+                                                    <div className="bg-white rounded-xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">總損益 (NT$)</div><div className={`text-lg font-black mt-1 ${Number(mktStats.profit||0)>=0?'text-rose-600':'text-emerald-600'}`}>{Number(mktStats.profit||0)>=0?'+':''}${Number(mktStats.profit||0).toLocaleString(undefined,{maximumFractionDigits:0})}</div></div>
+                                                    <div className="bg-white rounded-xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">報酬率 / 配息(NT$)</div><div className={`text-lg font-black mt-1 ${Number(mktStats.roi||0)>=0?'text-rose-600':'text-emerald-600'}`}>{Number(mktStats.roi||0)>=0?'+':''}{Number(mktStats.roi||0).toFixed(2)}%<span className="text-slate-400 text-xs font-normal ml-2">${Number(mktStats.div||0).toLocaleString(undefined,{maximumFractionDigits:0})}</span></div></div>
+                                                </div>
+                                            </div>
+                                            {/* 明細列表 */}
+                                            <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
+                                                <div className="overflow-x-auto">
+                                                    <table className="w-full text-left text-xs md:text-sm border-collapse">
+                                                        <thead>{theadRow}</thead>
+                                                        <tbody className="divide-y divide-slate-100 font-medium">
+                                                            {mktP.map(renderRow)}
+                                                            <tr className="bg-slate-50 border-t-2 border-slate-200 text-[11px] font-bold text-slate-600">
+                                                                <td className="p-3" colSpan="5">小計</td>
+                                                                <td className="p-3 font-mono">NT${Number(sub.cost).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+                                                                <td className="p-3 font-mono">NT${Number(sub.value).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+                                                                <td className="p-3 font-mono text-amber-600">NT${Number(sub.divs).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+                                                                <td className="p-3 font-mono text-emerald-600">NT${Number(sub.realized).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+                                                                <td className={`p-3 font-mono ${sub.profit>=0?'text-rose-600':'text-emerald-600'}`}>{sub.profit>=0?'+':''}NT${Number(sub.profit).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+                                                                <td className="p-3 text-center"><span className={`px-2 py-0.5 rounded font-bold ${subRoi>=0?'text-rose-600 bg-rose-50':'text-emerald-600 bg-emerald-50'}`}>{subRoi>=0?'+':''}{subRoi.toFixed(2)}%</span></td>
+                                                            </tr>
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    );
+                                };
                                 if (portfolio.length === 0) return (
                                     <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm space-y-3">
                                         <h3 className="font-extrabold text-slate-800 text-sm">🇹🇼 台股 <span className="text-xs font-normal text-slate-400">（範例）</span></h3>
@@ -475,38 +507,15 @@
                                         </table></div>
                                     </div>
                                 );
-                                return ['TW', 'US'].map(mkt => {
-                                    const mktP = portfolio.filter(p => p.market === mkt);
-                                    if (mktP.length === 0) return null;
-                                    const sub = mktP.reduce((a, p) => ({
-                                        cost: a.cost + (p.currentInvestCost||0), value: a.value + (p.currentMarketValue||0),
-                                        divs: a.divs + (p.accumulatedDividend||0), realized: a.realized + (p.realizedProfitTwd||0),
-                                        profit: a.profit + (p.totalProfit||0)
-                                    }), { cost:0, value:0, divs:0, realized:0, profit:0 });
-                                    const subRoi = sub.cost > 0 ? (sub.profit / sub.cost) * 100 : 0;
-                                    return (
-                                        <div key={mkt} className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm space-y-3">
-                                            <h3 className="font-extrabold text-slate-800 text-sm">{mkt==='TW'?'🇹🇼 台股':'🇺🇸 美股'} <span className="text-xs font-normal text-slate-400">{mkt==='US'?'（現價附原始美金×即時匯率，全欄台幣計價）':''}</span></h3>
-                                            <div className="overflow-x-auto">
-                                                <table className="w-full text-left text-xs md:text-sm border-collapse">
-                                                    <thead>{theadRow}</thead>
-                                                    <tbody className="divide-y divide-slate-100 font-medium">
-                                                        {mktP.map(renderRow)}
-                                                        <tr className="bg-slate-50 border-t-2 border-slate-200 text-[11px] font-bold text-slate-600">
-                                                            <td className="p-3" colSpan="5">小計</td>
-                                                            <td className="p-3 font-mono">NT${Number(sub.cost).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
-                                                            <td className="p-3 font-mono">NT${Number(sub.value).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
-                                                            <td className="p-3 font-mono text-amber-600">NT${Number(sub.divs).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
-                                                            <td className="p-3 font-mono text-emerald-600">NT${Number(sub.realized).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
-                                                            <td className={`p-3 font-mono ${sub.profit>=0?'text-rose-600':'text-emerald-600'}`}>{sub.profit>=0?'+':''}NT${Number(sub.profit).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
-                                                            <td className="p-3 text-center"><span className={`px-2 py-0.5 rounded font-bold ${subRoi>=0?'text-rose-600 bg-rose-50':'text-emerald-600 bg-emerald-50'}`}>{subRoi>=0?'+':''}{subRoi.toFixed(2)}%</span></td>
-                                                        </tr>
-                                                    </tbody>
-                                                </table>
-                                            </div>
-                                        </div>
-                                    );
-                                });
+                                const twSection = renderMarketSection('TW');
+                                const usSection = renderMarketSection('US');
+                                return (
+                                    <>
+                                        {twSection}
+                                        {twSection && usSection && <hr className="border-slate-200" />}
+                                        {usSection}
+                                    </>
+                                );
                             })()}
                         </div>
                     )}
