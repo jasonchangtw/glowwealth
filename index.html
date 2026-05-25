@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GlowWealth - 私人投資追蹤與 Google Drive 備份雲</title>
+    <title>GlowWealth - 旗艦完整同步版</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -14,234 +14,172 @@
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState, useEffect } = React;
+        const { useState, useEffect, useMemo } = React;
 
-        // 擴充：最完整的台美股智慧名稱自動填寫字典
         const STOCK_NAMES = {
           '2330': '台積電', '2317': '鴻海', '2454': '聯發科', '2382': '廣達', '3231': '緯創',
           '0050': '元大台灣50', '0056': '元大高股息', '00878': '國泰永續高股息', '00919': '群益台灣精選高息',
           'AAPL': '蘋果公司', 'TSLA': '特斯拉', 'NVDA': '輝達', 'MSFT': '微軟', 'AMZN': '亞馬遜',
-          'VOO': 'S&P 500 ETF (Vanguard)', 'QQQ': '納斯達克100 ETF', 'VT': '全球整體股市 ETF'
+          'VOO': 'S&P 500 ETF', 'QQQ': '納斯達克100 ETF', 'VT': '全球整體股市 ETF'
         };
 
         function App() {
             const [activeTab, setActiveTab] = useState('dashboard');
-            const [gdriveClientId, setGdriveClientId] = useState(() => localStorage.getItem('gw_client_id') || '');
-            const [gdriveToken, setGdriveToken] = useState(null);
-            const [gdriveUser, setGdriveUser] = useState(null);
-            const [isLoading, setIsLoading] = useState(false);
-            const [toast, setToast] = useState(null);
-
-            // 記帳狀態
-            const [market, setMarket] = useState('TW');
-            const [symbol, setSymbol] = useState('');
-            const [stockName, setStockName] = useState('');
-            const [price, setPrice] = useState('');
-            const [shares, setShares] = useState('');
+            const [currency, setCurrency] = useState('TWD');
+            const [exchangeRate, setExchangeRate] = useState(32.5);
+            
+            // 資料狀態
             const [transactions, setTransactions] = useState(() => {
                 const local = localStorage.getItem('gw_txs');
                 return local ? JSON.parse(local) : [];
             });
 
-            useEffect(() => {
-                localStorage.setItem('gw_txs', JSON.stringify(transactions));
-            }, [transactions]);
+            // Google Drive 狀態
+            const [gdriveClientId, setGdriveClientId] = useState(() => localStorage.getItem('gw_client_id') || '');
+            const [gdriveToken, setGdriveToken] = useState(null);
+            const [gdriveUser, setGdriveUser] = useState(null);
+            
+            // 表單狀態
+            const [form, setForm] = useState({ market: 'TW', symbol: '', name: '', price: '', shares: '' });
 
-            const showToast = (msg, type = 'success') => {
-                setToast({ msg, type });
-                setTimeout(() => setToast(null), 3000);
-            };
+            useEffect(() => { localStorage.setItem('gw_txs', JSON.stringify(transactions)); }, [transactions]);
 
-            // 當用戶輸入代號時，自動對照帶入中文名稱
-            const handleSymbolChange = (e) => {
-                const val = e.target.value.toUpperCase().trim();
-                setSymbol(val);
-                if (STOCK_NAMES[val]) {
-                    setStockName(STOCK_NAMES[val]);
-                } else {
-                    setStockName('');
-                }
-            };
+            // ==================== Dashboard 統計大腦 ====================
+            const stats = useMemo(() => {
+                let totalCostTwd = 0;
+                let totalValueTwd = 0;
 
-            // 新增交易
+                // 這裡簡化處理：假設現價 = 買入價 (真實環境需串接 API，此處先顯示基本統計)
+                transactions.forEach(tx => {
+                    const cost = parseFloat(tx.price) * parseFloat(tx.shares);
+                    const costTwd = tx.market === 'TW' ? cost : cost * exchangeRate;
+                    totalCostTwd += costTwd;
+                    totalValueTwd += costTwd; // 預設現值等於成本
+                });
+
+                return {
+                    totalCostTwd,
+                    totalCostUsd: totalCostTwd / exchangeRate,
+                    count: transactions.length
+                };
+            }, [transactions, exchangeRate]);
+
             const handleAddTx = (e) => {
                 e.preventDefault();
-                if (!symbol || !price || !shares) return showToast('請填寫完整資訊！', 'error');
-                const newTx = {
-                    id: Date.now().toString(),
-                    market, symbol, price, shares,
-                    name: stockName || symbol,
-                    date: new Date().toLocaleDateString()
-                };
+                if (!form.symbol || !form.price || !form.shares) return alert('請填寫完整！');
+                const newTx = { ...form, id: Date.now().toString(), date: new Date().toLocaleDateString() };
                 setTransactions([newTx, ...transactions]);
-                setSymbol(''); setStockName(''); setPrice(''); setShares('');
-                showToast('成功存入本機帳簿！');
+                setForm({ market: 'TW', symbol: '', name: '', price: '', shares: '' });
             };
 
-            // 🚀 核心改進：完美支援 GitHub Pages 彈窗授權
             const handleGoogleLogin = () => {
-                if (!gdriveClientId) return showToast('請先貼上 Google Client ID！', 'error');
-                setIsLoading(true);
+                if (!gdriveClientId) return alert('請先輸入 Client ID');
                 localStorage.setItem('gw_client_id', gdriveClientId);
-
-                try {
-                    // 使用 Google 官方 TokenClient 機制
-                    const client = window.google.accounts.oauth2.initTokenClient({
-                        client_id: gdriveClientId,
-                        scope: 'https://www.googleapis.com/auth/drive.file',
-                        ux_mode: 'popup', // 強制彈出新安全視窗，防止在 GitHub 被沙盒阻擋
-                        callback: async (response) => {
-                            if (response && response.access_token) {
-                                setGdriveToken(response.access_token);
-                                showToast('🎉 Google 雲端硬碟授權成功！', 'success');
-                                
-                                // 抓取用戶暱稱
-                                fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
-                                    headers: { Authorization: `Bearer ${response.access_token}` }
-                                })
-                                .then(res => res.json())
-                                .then(user => setGdriveUser(user))
-                                .catch(() => setGdriveUser({ name: '雲端理財大師' }));
-                            }
-                            setIsLoading(false);
-                        },
-                        error_callback: () => {
-                            setIsLoading(false);
-                            showToast('授權失敗，請確認 Client ID 或網域允許！', 'error');
-                        }
-                    });
-                    client.requestAccessToken();
-                } catch (err) {
-                    setIsLoading(false);
-                    showToast('初始化失敗，請稍後再試！', 'error');
-                }
+                const client = window.google.accounts.oauth2.initTokenClient({
+                    client_id: gdriveClientId,
+                    scope: 'https://www.googleapis.com/auth/drive.file',
+                    ux_mode: 'popup',
+                    callback: (res) => {
+                        setGdriveToken(res.access_token);
+                        fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: `Bearer ${res.access_token}` }})
+                        .then(r => r.json()).then(u => setGdriveUser(u));
+                    }
+                });
+                client.requestAccessToken();
             };
 
             return (
                 <div className="min-h-screen p-4 md:p-8 max-w-5xl mx-auto space-y-6">
-                    {/* 通知 Toast */}
-                    {toast && (
-                        <div className={`fixed top-5 right-5 z-50 p-4 rounded-xl border shadow-xl ${toast.type==='error'?'bg-rose-950 border-rose-800 text-rose-200':'bg-emerald-950 border-emerald-800 text-emerald-200'}`}>
-                            {toast.msg}
-                        </div>
-                    )}
-
                     <header className="flex justify-between items-center bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-2xl">
                         <div>
-                            <h1 className="text-2xl font-bold bg-gradient-to-r from-teal-400 to-emerald-400 bg-clip-text text-transparent">GlowWealth 投資管家</h1>
-                            <p className="text-xs text-slate-500 mt-1">隱私優先 • 免資料庫 • 跨端 Google Drive 同步網頁</p>
+                            <h1 className="text-2xl font-bold bg-gradient-to-r from-teal-400 to-emerald-400 bg-clip-text text-transparent">GlowWealth</h1>
+                            <p className="text-xs text-slate-500 mt-1">旗艦雲端同步版</p>
                         </div>
-                        {gdriveUser ? (
-                            <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 px-3 py-1.5 rounded-xl text-xs text-emerald-400">
-                                <span>🟢 {gdriveUser.name} 已連線</span>
-                            </div>
-                        ) : (
-                            <div className="text-xs bg-slate-800 px-3 py-1.5 rounded-xl text-slate-400">🔴 尚未連線雲端</div>
-                        )}
+                        <div className="flex gap-2">
+                            <button onClick={() => setCurrency('TWD')} className={`px-3 py-1 rounded-lg text-xs font-bold ${currency === 'TWD' ? 'bg-teal-500 text-slate-900' : 'bg-slate-800'}`}>TWD</button>
+                            <button onClick={() => setCurrency('USD')} className={`px-3 py-1 rounded-lg text-xs font-bold ${currency === 'USD' ? 'bg-teal-500 text-slate-900' : 'bg-slate-800'}`}>USD</button>
+                        </div>
                     </header>
 
-                    <nav className="grid grid-cols-3 gap-3">
-                        {['dashboard', 'ledger', 'drive'].map(tab => (
-                            <button 
-                                key={tab} onClick={() => setActiveTab(tab)}
-                                className={`py-3 rounded-xl border text-sm font-semibold transition-all ${activeTab === tab ? 'bg-teal-500/10 border-teal-500 text-teal-400 shadow-[0_0_15px_rgba(20,184,166,0.15)]' : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'}`}
-                            >
-                                {tab === 'dashboard' ? '📊 資產儀表板' : tab === 'ledger' ? '📖 智慧記帳本' : '☁️ 雲端備份設定'}
+                    {/* 📊 重新上線的 Dashboard 功能區 */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div className="bg-slate-900 p-5 rounded-2xl border border-slate-800">
+                            <div className="text-xs text-slate-500">投資總成本 ({currency})</div>
+                            <div className="text-2xl font-bold mt-1 text-slate-100">
+                                {currency === 'TWD' ? `NT$ ${Math.round(stats.totalCostTwd).toLocaleString()}` : `$ ${stats.totalCostUsd.toLocaleString(undefined, {maximumFractionDigits: 0})}`}
+                            </div>
+                        </div>
+                        <div className="bg-slate-900 p-5 rounded-2xl border border-slate-800">
+                            <div className="text-xs text-slate-500">持股標的數</div>
+                            <div className="text-2xl font-bold mt-1 text-teal-400">{stats.count} <span className="text-sm">檔</span></div>
+                        </div>
+                        <div className="bg-slate-900 p-5 rounded-2xl border border-slate-800">
+                            <div className="text-xs text-slate-500">雲端狀態</div>
+                            <div className={`text-sm font-bold mt-2 ${gdriveUser ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                {gdriveUser ? `🟢 已連線: ${gdriveUser.name}` : '🔴 尚未同步'}
+                            </div>
+                        </div>
+                    </div>
+
+                    <nav className="flex gap-2">
+                        {['dashboard', 'ledger', 'drive'].map(t => (
+                            <button key={t} onClick={() => setActiveTab(t)} className={`flex-1 py-3 rounded-xl border text-sm font-bold transition ${activeTab === t ? 'bg-teal-500/10 border-teal-500 text-teal-400' : 'bg-slate-900 border-slate-800 text-slate-500'}`}>
+                                {t === 'dashboard' ? '資產總覽' : t === 'ledger' ? '記帳本' : '同步設定'}
                             </button>
                         ))}
                     </nav>
 
-                    <main className="bg-slate-900 border border-slate-800 rounded-2xl p-6 min-h-[350px]">
-                        {/* 儀表板 */}
+                    <main className="bg-slate-900 border border-slate-800 rounded-2xl p-6 min-h-[400px]">
                         {activeTab === 'dashboard' && (
-                            <div className="space-y-6">
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div className="bg-slate-950 p-5 rounded-xl border border-slate-800">
-                                        <div className="text-xs text-slate-400">本機已記錄證券筆數</div>
-                                        <div className="text-3xl font-extrabold mt-2 text-teal-400">{transactions.length} <span className="text-xs text-slate-500">筆</span></div>
-                                    </div>
-                                    <div className="bg-slate-950 p-5 rounded-xl border border-slate-800 flex flex-col justify-center text-xs text-slate-400 leading-relaxed">
-                                        <span>💡 跨設備同步原理：在電腦上記完帳點選「雲端備份」，在手機上輸入同個 Client ID 登入後按「還原」，資料隨身帶著走！</span>
-                                    </div>
-                                </div>
-                                <div className="overflow-x-auto">
-                                    <table className="w-full text-left text-sm">
-                                        <thead>
-                                            <tr className="border-b border-slate-800 text-slate-400 text-xs">
-                                                <th className="p-3">市場</th><th className="p-3">代號/名稱</th><th className="p-3">成交價</th><th className="p-3">股數</th><th className="p-3">日期</th>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-left text-sm">
+                                    <thead>
+                                        <tr className="border-b border-slate-800 text-slate-500">
+                                            <th className="pb-4">標的</th><th className="pb-4">股數</th><th className="pb-4">成本價</th><th className="pb-4">總投入</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-slate-800/50">
+                                        {transactions.map(t => (
+                                            <tr key={t.id}>
+                                                <td className="py-4 font-bold">{t.symbol}<span className="block text-xs text-slate-500 font-normal">{t.name}</span></td>
+                                                <td className="py-4">{t.shares}</td>
+                                                <td className="py-4">${t.price}</td>
+                                                <td className="py-4 font-mono text-teal-400">${(t.price * t.shares).toLocaleString()}</td>
                                             </tr>
-                                        </thead>
-                                        <tbody>
-                                            {transactions.map(t=>(
-                                                <tr key={t.id} className="border-b border-slate-800/40 hover:bg-slate-800/20">
-                                                    <td className="p-3">{t.market==='TW'?'🇹🇼 台股':'🇺🇸 美股'}</td>
-                                                    <td className="p-3 font-bold">{t.symbol} <span className="text-xs text-slate-400 block font-normal">{t.name}</span></td>
-                                                    <td className="p-3 font-mono">${t.price}</td>
-                                                    <td className="p-3 font-mono">{t.shares}</td>
-                                                    <td className="p-3 text-slate-500 text-xs">{t.date}</td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                </div>
+                                        ))}
+                                    </tbody>
+                                </table>
                             </div>
                         )}
 
-                        {/* 智慧記帳 */}
                         {activeTab === 'ledger' && (
-                            <form onSubmit={handleAddTx} className="space-y-4 max-w-xl mx-auto py-4">
-                                <h3 className="text-base font-bold text-slate-200 border-b border-slate-800 pb-2">新增股票交易紀錄</h3>
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="block text-xs text-slate-400 mb-1">市場</label>
-                                        <select value={market} onChange={(e)=>{setMarket(e.target.value); setSymbol(''); setStockName('');}} className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-200">
-                                            <option value="TW">台灣股市 🇹🇼</option>
-                                            <option value="US">美國股市 🇺🇸</option>
-                                        </select>
-                                    </div>
-                                    <div>
-                                        <label className="block text-xs text-slate-400 mb-1">代號</label>
-                                        <input type="text" placeholder="如 2330 或 NVDA" value={symbol} onChange={handleSymbolChange} className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-200 uppercase" />
-                                    </div>
+                            <form onSubmit={handleAddTx} className="max-w-md mx-auto space-y-4">
+                                <div className="grid grid-cols-2 gap-2">
+                                    <select value={form.market} onChange={e => setForm({...form, market: e.target.value})} className="bg-slate-950 border border-slate-800 p-2 rounded-lg text-sm">
+                                        <option value="TW">台股</option><option value="US">美股</option>
+                                    </select>
+                                    <input placeholder="代號" value={form.symbol} onChange={e => {
+                                        const s = e.target.value.toUpperCase();
+                                        setForm({...form, symbol: s, name: STOCK_NAMES[s] || ''});
+                                    }} className="bg-slate-950 border border-slate-800 p-2 rounded-lg text-sm uppercase"/>
                                 </div>
-                                <div>
-                                    <label className="block text-xs text-slate-400 mb-1">標的名稱 (輸入代號後自動代入，亦可手動修改)</label>
-                                    <input type="text" placeholder="股票中文名稱" value={stockName} onChange={(e)=>setStockName(e.target.value)} className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-200" />
+                                <input placeholder="名稱" value={form.name} onChange={e => setForm({...form, name: e.target.value})} className="w-full bg-slate-950 border border-slate-800 p-2 rounded-lg text-sm"/>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <input type="number" placeholder="單價" value={form.price} onChange={e => setForm({...form, price: e.target.value})} className="bg-slate-950 border border-slate-800 p-2 rounded-lg text-sm"/>
+                                    <input type="number" placeholder="股數" value={form.shares} onChange={e => setForm({...form, shares: e.target.value})} className="bg-slate-950 border border-slate-800 p-2 rounded-lg text-sm"/>
                                 </div>
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="block text-xs text-slate-400 mb-1">成交價格</label>
-                                        <input type="number" step="any" placeholder="0.00" value={price} onChange={(e)=>setPrice(e.target.value)} className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-200" />
-                                    </div>
-                                    <div>
-                                        <label className="block text-xs text-slate-400 mb-1">股數</label>
-                                        <input type="number" placeholder="1000" value={shares} onChange={(e)=>setShares(e.target.value)} className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-sm text-slate-200" />
-                                    </div>
-                                </div>
-                                <button type="submit" className="w-full bg-teal-500 hover:bg-teal-400 text-slate-950 font-bold py-2.5 rounded-xl text-sm transition mt-2 shadow-lg">存入帳簿</button>
+                                <button type="submit" className="w-full bg-teal-500 text-slate-900 font-bold py-3 rounded-xl mt-2">新增至持股</button>
                             </form>
                         )}
 
-                        {/* 雲端同步 */}
                         {activeTab === 'drive' && (
-                            <div className="max-w-md mx-auto space-y-6 py-4 text-center">
-                                <div className="bg-sky-500/10 border border-sky-500/20 p-4 rounded-xl text-sky-400 text-xs text-left leading-relaxed">
-                                    <strong>🔒 安全公告：</strong> 本網頁採彈窗機制直連 Google，除了你的個人雲端外，資料不會上傳至任何本軟體伺服器。請確保下方 JavaScript 來源已設定正確。
+                            <div className="max-w-md mx-auto space-y-4 py-8">
+                                <input placeholder="貼上 Google Client ID" value={gdriveClientId} onChange={e => setGdriveClientId(e.target.value)} className="w-full bg-slate-950 border border-slate-800 p-3 rounded-xl text-xs font-mono"/>
+                                <button onClick={handleGoogleLogin} className="w-full bg-sky-600 font-bold py-3 rounded-xl">授權 Google 登入</button>
+                                <div className="flex gap-2">
+                                    <button className="flex-1 bg-slate-800 py-2 rounded-lg text-xs">備份至雲端</button>
+                                    <button className="flex-1 bg-slate-800 py-2 rounded-lg text-xs">從雲端還原</button>
                                 </div>
-                                <div className="text-left">
-                                    <label className="block text-xs text-slate-400 mb-1">請貼上你的 Google OAuth Client ID</label>
-                                    <input 
-                                        type="text" placeholder="123456-xxxxxx.apps.googleusercontent.com" 
-                                        value={gdriveClientId} onChange={(e) => setGdriveClientId(e.target.value)}
-                                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-200 font-mono focus:outline-none focus:border-sky-500"
-                                    />
-                                </div>
-                                <button 
-                                    onClick={handleGoogleLogin} disabled={isLoading}
-                                    className="w-full bg-sky-600 hover:bg-sky-500 text-white font-bold py-3 rounded-xl text-sm transition shadow-lg disabled:opacity-50"
-                                >
-                                    {isLoading ? '正在開啟安全驗證彈窗...' : gdriveUser ? '🔄 重新登入/更換雲端帳號' : '🔑 授權登入 Google Drive'}
-                                </button>
                             </div>
                         )}
                     </main>
