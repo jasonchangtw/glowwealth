@@ -207,25 +207,37 @@
             }, [transactions, dividends, priceData, exchangeRate]);
 
             const stats = useMemo(() => {
-                let totalCostTwd = 0, totalValueTwd = 0, totalProfitTwd = 0; let twValue = 0, usValue = 0;
+                let totalCostTwd = 0, totalValueTwd = 0, totalProfitTwd = 0;
+                let twCost = 0, twValue = 0, twProfit = 0;
+                let usCost = 0, usValue = 0, usProfit = 0;
                 portfolio.forEach(p => {
-                    // portfolio 已全部台幣，直接累加
                     totalCostTwd += p.currentInvestCost;
                     totalValueTwd += p.currentMarketValue;
                     totalProfitTwd += p.totalProfit;
-                    if (p.market === 'TW') twValue += p.currentMarketValue; else usValue += p.currentMarketValue;
+                    if (p.market === 'TW') {
+                        twCost += p.currentInvestCost; twValue += p.currentMarketValue; twProfit += p.totalProfit;
+                    } else {
+                        usCost += p.currentInvestCost; usValue += p.currentMarketValue; usProfit += p.totalProfit;
+                    }
                 });
+                let twDivIncome = 0, usDivIncome = 0;
+                if (dividends && dividends.length > 0) {
+                    dividends.forEach(d => {
+                        if (!d) return;
+                        const rate = d.market === 'US' ? (parseFloat(d.divRate || 0) || exchangeRate) : 1;
+                        const amt = parseFloat(d.netAmount || 0) * rate;
+                        if (d.market === 'TW') twDivIncome += amt; else usDivIncome += amt;
+                    });
+                }
                 const isBookEmpty = !transactions || transactions.length === 0;
                 return {
                     totalValue: isBookEmpty ? 19480 : totalValueTwd,
                     roi: isBookEmpty ? 4.18 : (totalCostTwd > 0 ? (totalProfitTwd / totalCostTwd) * 100 : 0),
-                    divIncome: dividends && dividends.length > 0 ? dividends.reduce((sum, d) => {
-                        if (!d) return sum;
-                        const rate = d.market === 'US' ? (parseFloat(d.divRate || 0) || exchangeRate) : 1;
-                        return sum + parseFloat(d.netAmount || 0) * rate;
-                    }, 0) : 192,
+                    divIncome: (twDivIncome + usDivIncome) || (isBookEmpty ? 192 : 0),
                     twWeight: totalValueTwd > 0 ? (twValue / totalValueTwd) * 100 : 35.2,
-                    usWeight: totalValueTwd > 0 ? (usValue / totalValueTwd) * 100 : 64.8
+                    usWeight: totalValueTwd > 0 ? (usValue / totalValueTwd) * 100 : 64.8,
+                    twValue, twCost, twProfit, twRoi: twCost > 0 ? (twProfit / twCost) * 100 : 0, twDivIncome,
+                    usValue, usCost, usProfit, usRoi: usCost > 0 ? (usProfit / usCost) * 100 : 0, usDivIncome,
                 };
             }, [portfolio, dividends, exchangeRate, transactions]);
 
@@ -398,12 +410,34 @@
                     {/* Tab: 總覽 */}
                     {activeTab === 'dashboard' && (
                         <div className="space-y-6">
-                            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                                <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm"><div className="text-[11px] font-bold text-slate-400 tracking-wider">總資產 (換算台幣)</div><div className="text-xl md:text-2xl font-black text-slate-900 mt-2">${Number(stats.totalValue || 0).toLocaleString(undefined, {maximumFractionDigits:0})}</div></div>
-                                <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm"><div className="text-[11px] font-bold text-slate-400 tracking-wider">總報酬率</div><div className={`text-xl md:text-2xl font-black mt-2 ${Number(stats.roi||0)>=0?'text-rose-600':'text-emerald-600'}`}>{Number(stats.roi||0)>=0?'+':''}{Number(stats.roi||0).toFixed(2)}%</div></div>
-                                <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm"><div className="text-[11px] font-bold text-slate-400 tracking-wider">今日損益</div><div className="text-xl md:text-2xl font-black text-rose-600 mt-2">+$96</div></div>
-                                <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm"><div className="text-[11px] font-bold text-slate-400 tracking-wider">配息收入</div><div className="text-xl md:text-2xl font-black text-slate-900 mt-2">${Number(stats.divIncome || 0).toLocaleString(undefined, {maximumFractionDigits:0})}</div></div>
-                                <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm col-span-2 md:col-span-1"><div className="text-[11px] font-bold text-slate-400 tracking-wider">本月 / 今年</div><div className="text-xl md:text-2xl font-black text-rose-600 mt-2">+$489 / $789</div></div>
+                            {/* 台股 summary */}
+                            <div className="bg-sky-50 border border-sky-100 rounded-2xl p-4 space-y-3">
+                                <div className="text-xs font-black text-sky-700 tracking-wide">🇹🇼 台股</div>
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                    <div className="bg-white rounded-xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">總市值 (NT$)</div><div className="text-lg font-black text-slate-900 mt-1">${Number(stats.twValue||0).toLocaleString(undefined,{maximumFractionDigits:0})}</div></div>
+                                    <div className="bg-white rounded-xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">投入成本 (NT$)</div><div className="text-lg font-black text-slate-700 mt-1">${Number(stats.twCost||0).toLocaleString(undefined,{maximumFractionDigits:0})}</div></div>
+                                    <div className="bg-white rounded-xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">總損益 (NT$)</div><div className={`text-lg font-black mt-1 ${Number(stats.twProfit||0)>=0?'text-rose-600':'text-emerald-600'}`}>{Number(stats.twProfit||0)>=0?'+':''}${Number(stats.twProfit||0).toLocaleString(undefined,{maximumFractionDigits:0})}</div></div>
+                                    <div className="bg-white rounded-xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">報酬率 / 配息(NT$)</div><div className={`text-lg font-black mt-1 ${Number(stats.twRoi||0)>=0?'text-rose-600':'text-emerald-600'}`}>{Number(stats.twRoi||0)>=0?'+':''}{Number(stats.twRoi||0).toFixed(2)}%<span className="text-slate-400 text-xs font-normal ml-2">${Number(stats.twDivIncome||0).toLocaleString(undefined,{maximumFractionDigits:0})}</span></div></div>
+                                </div>
+                            </div>
+
+                            {/* 美股 summary */}
+                            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
+                                <div className="text-xs font-black text-slate-600 tracking-wide">🇺🇸 美股 <span className="font-normal text-slate-400">（全部換算台幣）</span></div>
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                    <div className="bg-white rounded-xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">總市值 (NT$)</div><div className="text-lg font-black text-slate-900 mt-1">${Number(stats.usValue||0).toLocaleString(undefined,{maximumFractionDigits:0})}</div></div>
+                                    <div className="bg-white rounded-xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">投入成本 (NT$)</div><div className="text-lg font-black text-slate-700 mt-1">${Number(stats.usCost||0).toLocaleString(undefined,{maximumFractionDigits:0})}</div></div>
+                                    <div className="bg-white rounded-xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">總損益 (NT$)</div><div className={`text-lg font-black mt-1 ${Number(stats.usProfit||0)>=0?'text-rose-600':'text-emerald-600'}`}>{Number(stats.usProfit||0)>=0?'+':''}${Number(stats.usProfit||0).toLocaleString(undefined,{maximumFractionDigits:0})}</div></div>
+                                    <div className="bg-white rounded-xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">報酬率 / 配息(NT$)</div><div className={`text-lg font-black mt-1 ${Number(stats.usRoi||0)>=0?'text-rose-600':'text-emerald-600'}`}>{Number(stats.usRoi||0)>=0?'+':''}{Number(stats.usRoi||0).toFixed(2)}%<span className="text-slate-400 text-xs font-normal ml-2">${Number(stats.usDivIncome||0).toLocaleString(undefined,{maximumFractionDigits:0})}</span></div></div>
+                                </div>
+                            </div>
+
+                            {/* 合計 */}
+                            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm md:col-span-1 col-span-2"><div className="text-[10px] font-bold text-slate-400 tracking-wider">合計總資產 (NT$)</div><div className="text-2xl font-black text-slate-900 mt-1">${Number(stats.totalValue||0).toLocaleString(undefined,{maximumFractionDigits:0})}</div></div>
+                                <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">合計報酬率</div><div className={`text-xl font-black mt-1 ${Number(stats.roi||0)>=0?'text-rose-600':'text-emerald-600'}`}>{Number(stats.roi||0)>=0?'+':''}{Number(stats.roi||0).toFixed(2)}%</div></div>
+                                <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">合計配息收入 (NT$)</div><div className="text-xl font-black text-slate-900 mt-1">${Number(stats.divIncome||0).toLocaleString(undefined,{maximumFractionDigits:0})}</div></div>
+                                <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">台股 / 美股 比重</div><div className="text-base font-black text-slate-700 mt-1">{Number(stats.twWeight||0).toFixed(1)}% / {Number(stats.usWeight||0).toFixed(1)}%</div></div>
                             </div>
 
                             {(() => {
