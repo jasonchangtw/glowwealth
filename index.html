@@ -25,7 +25,6 @@
           '00878': '國泰永續高股息', 'AAPL': '蘋果', 'TSLA': '特斯拉', 'NVDA': '輝達', 'VOO': 'S&P 500 ETF'
         };
 
-        // 模擬資產歷史快照 (用於渲染資產走勢長條圖)
         const MONTHLY_TREND = [
             { month: '1月', value: 16500 }, { month: '2月', value: 17200 },
             { month: '3月', value: 17000 }, { month: '4月', value: 18100 },
@@ -36,26 +35,24 @@
         function App() {
             const [activeTab, setActiveTab] = useState('dashboard');
             const [currency, setCurrency] = useState('TWD');
-            const [exchangeRate, setExchangeRate] = useState(31.2); // 依圖片同步 31.2
+            const [exchangeRate, setExchangeRate] = useState(31.2); 
             
-            // 資料集與快取管理
-            const [transactions, setTransactions] = useState(() => JSON.parse(localStorage.getItem('gw_v6_txs') || '[]'));
-            const [dividends, setDividends] = useState(() => JSON.parse(localStorage.getItem('gw_v6_divs') || '[]'));
+            const [transactions, setTransactions] = useState(() => JSON.parse(localStorage.getItem('gw_v7_txs') || '[]'));
+            const [dividends, setDividends] = useState(() => JSON.parse(localStorage.getItem('gw_v7_divs') || '[]'));
             const [gdriveClientId, setGdriveClientId] = useState(() => localStorage.getItem('gw_client_id') || '');
             const [gdriveToken, setGdriveToken] = useState(null);
             const [gdriveUser, setGdriveUser] = useState(null);
 
-            // 表單獨立狀態
             const [txForm, setTxForm] = useState({ date: new Date().toISOString().split('T')[0], market: 'TW', symbol: '', type: 'BUY', price: '', shares: '', fee: '0', tax: '0' });
             const [divForm, setDivForm] = useState({ date: new Date().toISOString().split('T')[0], market: 'TW', symbol: '', amount: '', taxWithheld: '0', netAmount: '' });
 
             useEffect(() => {
-                localStorage.setItem('gw_v6_txs', JSON.stringify(transactions));
-                localStorage.setItem('gw_v6_divs', JSON.stringify(dividends));
+                localStorage.setItem('gw_v7_txs', JSON.stringify(transactions));
+                localStorage.setItem('gw_v7_divs', JSON.stringify(dividends));
                 localStorage.setItem('gw_client_id', gdriveClientId);
             }, [transactions, dividends, gdriveClientId]);
 
-            // ==================== 核心數據精算大腦 ====================
+            // 計算大腦
             const portfolio = useMemo(() => {
                 const summary = {};
                 transactions.forEach(tx => {
@@ -80,27 +77,27 @@
                 portfolio.forEach(p => {
                     const factor = p.market === 'TW' ? 1 : exchangeRate;
                     costTwd += p.totalCost * (p.market === 'TW' ? 1 : exchangeRate);
-                    // 這裡暫以輸入現值預估，在完整版環境可以根據圖片精準調整
                     const v = p.totalShares * p.price * factor;
                     if (p.market === 'TW') twValue += v; else usValue += v;
                 });
-                const totalValue = twValue + usValue || 19480; // 預設依圖片顯示 19480
-                const totalDiv = dividends.reduce((sum, d) => sum + parseFloat(d.netAmount || 0) * (d.market === 'TW' ? 1 : exchangeRate), 0) || 192; // 預設 192
+                const totalValue = transactions.length > 0 ? (twValue + usValue) : 19480; 
+                const totalDiv = dividends.reduce((sum, d) => sum + parseFloat(d.netAmount || 0) * (d.market === 'TW' ? 1 : exchangeRate), 0);
 
                 return {
                     totalValue,
-                    roi: totalCostTwd > 0 ? ((totalValue - totalCostTwd) / totalCostTwd) * 100 : 4.18,
-                    divIncome: totalDiv,
+                    roi: costTwd > 0 ? ((totalValue - costTwd) / costTwd) * 100 : 4.18,
+                    divIncome: dividends.length > 0 ? totalDiv : 192,
                     twWeight: totalValue > 0 ? (twValue / totalValue) * 100 : 35.2,
                     usWeight: totalValue > 0 ? (usValue / totalValue) * 100 : 64.8
                 };
-            }, [portfolio, dividends, exchangeRate]);
+            }, [portfolio, dividends, exchangeRate, transactions]);
 
-            // ==================== 配息本智慧運算 ====================
+            // 配息自動算稅
             const handleDivFormChange = (e) => {
                 const { name, value } = e.target;
                 let updated = { ...divForm, [name]: value };
                 const amt = parseFloat(updated.amount || 0);
+                
                 if (name === 'amount' || name === 'market') {
                     if (updated.market === 'TW') {
                         updated.taxWithheld = amt >= 20000 ? Math.round(amt * 0.0211) : 0;
@@ -112,7 +109,6 @@
                 setDivForm(updated);
             };
 
-            // ==================== Google Drive 授權模組 ====================
             const handleGoogleLogin = () => {
                 if (!gdriveClientId) return alert("請先填寫 Google Client ID");
                 const client = window.google.accounts.oauth2.initTokenClient({
@@ -138,11 +134,11 @@
                         <div className="flex flex-wrap gap-2">
                             <span className="bg-slate-200/60 px-3 py-1.5 rounded-xl text-xs font-bold text-slate-600 self-center">本機模式</span>
                             <button onClick={() => alert(JSON.stringify({transactions, dividends}, null, 2))} className="bg-white border border-slate-200 hover:bg-slate-50 px-4 py-1.5 rounded-xl text-xs font-bold shadow-sm text-slate-700 transition">匯出 JSON</button>
-                            <button onClick={() => setActiveTab('ledger')} className="bg-teal-600 hover:bg-teal-500 text-white px-4 py-1.5 rounded-xl text-xs font-bold shadow-md transition">＋ 新增紀錄</button>
+                            <button onClick={() => setActiveTab('ledger')} className="bg-cyan-800 hover:bg-cyan-700 text-white px-4 py-1.5 rounded-xl text-xs font-bold shadow-md transition">＋ 新增紀錄</button>
                         </div>
                     </div>
 
-                    {/* 功能導航標籤卡 */}
+                    {/* 導航標籤 */}
                     <div className="flex gap-1 bg-slate-200/50 p-1 rounded-xl w-full md:w-80">
                         {['dashboard', 'ledger', 'dividend', 'drive'].map(t => (
                             <button key={t} onClick={() => setActiveTab(t)} className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${activeTab === t ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>
@@ -151,10 +147,9 @@
                         ))}
                     </div>
 
-                    {/* 核心分頁內容 */}
                     {activeTab === 'dashboard' && (
-                        <div className="space-y-6 animate-fadeIn">
-                            {/* 1. 五大數據指標卡片 (高度還原圖片) */}
+                        <div className="space-y-6">
+                            {/* 五大指標卡片 */}
                             <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                                 <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
                                     <div className="text-[11px] font-bold text-slate-400 tracking-wider">總資產</div>
@@ -163,12 +158,12 @@
                                 </div>
                                 <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
                                     <div className="text-[11px] font-bold text-slate-400 tracking-wider">總報酬率</div>
-                                    <div className="text-xl md:text-2xl font-black text-rose-600 mt-2">+{stats.roi.toFixed(2)}%</div>
+                                    <div className="text-xl md:text-2xl font-black text-teal-600 mt-2">+{stats.roi.toFixed(2)}%</div>
                                     <div className="text-[10px] text-slate-400 mt-1">$789</div>
                                 </div>
                                 <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
                                     <div className="text-[11px] font-bold text-slate-400 tracking-wider">今日損益</div>
-                                    <div className="text-xl md:text-2xl font-black text-rose-600 mt-2">+$96</div>
+                                    <div className="text-xl md:text-2xl font-black text-teal-600 mt-2">+$96</div>
                                     <div className="text-[10px] text-slate-400 mt-1">依最新收盤價估算</div>
                                 </div>
                                 <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
@@ -178,51 +173,43 @@
                                 </div>
                                 <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm col-span-2 md:col-span-1">
                                     <div className="text-[11px] font-bold text-slate-400 tracking-wider">本月 / 今年</div>
-                                    <div className="text-xl md:text-2xl font-black text-rose-600 mt-2">+$489 / $789</div>
+                                    <div className="text-xl md:text-2xl font-black text-teal-600 mt-2">+$489 / $789</div>
                                     <div className="text-[10px] text-slate-400 mt-1">示範期間損益</div>
                                 </div>
                             </div>
 
-                            {/* 2. 資產走勢長條圖與市場配置配置欄 */}
+                            {/* 圖表與配置 */}
                             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                                {/* 左側資產走勢柱狀圖 (純 CSS/SVG 高擬真打造) */}
                                 <div className="lg:col-span-2 bg-white border border-slate-100 rounded-2xl p-6 shadow-sm flex flex-col justify-between min-h-[350px]">
                                     <div className="flex justify-between items-center mb-4">
                                         <h3 className="font-extrabold text-slate-800 text-sm tracking-tight">資產走勢</h3>
                                         <span className="bg-sky-50 text-sky-600 font-bold text-[10px] px-2 py-0.5 rounded border border-sky-100">示範資料</span>
                                     </div>
                                     <div className="flex items-end justify-between gap-2 h-48 pt-4 border-b border-slate-100">
-                                        {MONTHLY_TREND.map(t => {
-                                            const heightPercent = (t.value / 20000) * 100;
-                                            return (
-                                                <div key={t.month} className="flex-1 flex flex-col items-center gap-2 group cursor-pointer">
-                                                    <div style={{ height: `${heightPercent}%` }} className="w-full bg-cyan-800 hover:bg-cyan-700 rounded-t-md transition-all shadow-sm relative">
-                                                        <div className="absolute -top-7 left-1/2 transform -translate-x-1/2 bg-slate-800 text-white text-[9px] px-1.5 py-0.5 rounded opacity-0 group-hover:opacity-100 transition shadow font-mono">${t.value}</div>
-                                                    </div>
-                                                    <span className="text-[11px] text-slate-400 font-medium pb-2">{t.month}</span>
-                                                </div>
-                                            );
-                                        })}
+                                        {MONTHLY_TREND.map(t => (
+                                            <div key={t.month} className="flex-1 flex flex-col items-center gap-2 group cursor-pointer">
+                                                <div style={{ height: `${(t.value / 20000) * 100}%` }} className="w-full bg-cyan-850 hover:bg-cyan-800 rounded-t-md transition-all shadow-sm"></div>
+                                                <span className="text-[11px] text-slate-400 font-medium pb-2">{t.month}</span>
+                                            </div>
+                                        ))}
                                     </div>
                                 </div>
 
-                                {/* 右側配置進度條與狀態欄 */}
                                 <div className="space-y-6">
                                     <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm space-y-4">
                                         <h3 className="font-extrabold text-slate-800 text-sm tracking-tight">市場配置</h3>
                                         <div className="space-y-3">
                                             <div>
                                                 <div className="flex justify-between text-xs font-bold text-slate-600 mb-1"><span>台股</span><span>{stats.twWeight.toFixed(1)}%</span></div>
-                                                <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden"><div style={{width: `${stats.twWeight}%`}} className="bg-cyan-800 h-full"></div></div>
+                                                <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden"><div style={{width: `${stats.twWeight}%`}} className="bg-cyan-850 h-full"></div></div>
                                             </div>
                                             <div>
                                                 <div className="flex justify-between text-xs font-bold text-slate-600 mb-1"><span>美股</span><span>{stats.usWeight.toFixed(1)}%</span></div>
-                                                <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden"><div style={{width: `${stats.usWeight}%`}} className="bg-cyan-800 h-full"></div></div>
+                                                <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden"><div style={{width: `${stats.usWeight}%`}} className="bg-cyan-850 h-full"></div></div>
                                             </div>
                                         </div>
                                     </div>
 
-                                    {/* 資料狀態清單 */}
                                     <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm space-y-4">
                                         <h3 className="font-extrabold text-slate-800 text-sm tracking-tight">資料狀態</h3>
                                         <div className="space-y-2">
@@ -234,10 +221,6 @@
                                                 <div><div className="text-xs font-bold text-slate-700">匯率</div><div className="text-[10px] text-slate-400 mt-0.5">富邦銀行 USD/TWD {exchangeRate}</div></div>
                                                 <span className="bg-sky-50 text-sky-600 font-bold text-[10px] px-2 py-0.5 rounded border border-sky-100">估算</span>
                                             </div>
-                                            <div className="flex justify-between items-center bg-slate-50 p-2.5 rounded-xl border border-slate-100">
-                                                <div><div className="text-xs font-bold text-slate-700">手續費</div><div className="text-[10px] text-slate-400 mt-0.5">實際值優先，缺值時估算</div></div>
-                                                <span className="bg-sky-50 text-sky-600 font-bold text-[10px] px-2 py-0.5 rounded border border-sky-100">估算</span>
-                                            </div>
                                         </div>
                                     </div>
                                 </div>
@@ -245,63 +228,62 @@
                         </div>
                     )}
 
-                    {/* Tab 2: 完整股票交易記帳本 */}
+                    {/* Tab 2: 記帳本 */}
                     {activeTab === 'ledger' && (
                         <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm space-y-6">
-                            <form onSubmit={(e)=>{e.preventDefault(); if(!txForm.symbol||!txForm.price)return; setTransactions([{...txForm, id:Date.now().toString(), name:STOCK_NAMES[txForm.symbol]||txForm.symbol}, ...transactions]); setTxForm({...txForm, symbol:'', price:'', shares:''}); showToast('交易已成功寫入！');}} className="grid grid-cols-1 sm:grid-cols-5 gap-3 items-end bg-slate-50 p-4 rounded-xl border border-slate-100">
+                            <form onSubmit={(e)=>{e.preventDefault(); if(!txForm.symbol||!txForm.price)return; setTransactions([{...txForm, id:Date.now().toString(), name:STOCK_NAMES[txForm.symbol]||txForm.symbol}, ...transactions]); setTxForm({...txForm, symbol:'', price:'', shares:''});}} className="grid grid-cols-1 sm:grid-cols-5 gap-3 items-end bg-slate-50 p-4 rounded-xl border border-slate-100">
                                 <div><label className="text-[11px] font-bold text-slate-500 block mb-1">交易日期</label><input type="date" value={txForm.date} onChange={e=>setTxForm({...txForm, date:e.target.value})} className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div>
-                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">標的代號</label><input type="text" placeholder="如 2330 / NVDA" value={txForm.symbol} onChange={e=>{const s=e.target.value.toUpperCase(); setTxForm({...txForm, symbol:s, name:STOCK_NAMES[s]||''})}} className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs uppercase" /></div>
-                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">交易種類</label><select value={txForm.type} onChange={e=>setTxForm({...txForm, type:e.target.value})} className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs"><option value="BUY">買入</option><option value="SELL">賣出</option></select></div>
-                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">成交單價 / 股數</label><div className="flex gap-1"><input type="number" step="any" placeholder="單價" value={txForm.price} onChange={e=>setTxForm({...txForm, price:e.target.value})} className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /><input type="number" placeholder="股數" value={txForm.shares} onChange={e=>setTxForm({...txForm, shares:e.target.value})} className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div></div>
-                                <button type="submit" className="w-full bg-slate-900 text-white font-bold py-2 rounded-lg text-xs transition hover:bg-slate-800">儲存資產紀錄</button>
+                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">標的代號</label><input type="text" placeholder="2330" value={txForm.symbol} onChange={e=>{const s=e.target.value.toUpperCase(); setTxForm({...txForm, symbol:s, name:STOCK_NAMES[s]||''})}} className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs uppercase font-mono" /></div>
+                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">種類</label><select value={txForm.type} onChange={e=>setTxForm({...txForm, type:e.target.value})} className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs"><option value="BUY">買入</option><option value="SELL">賣出</option></select></div>
+                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">單價 / 股數</label><div className="flex gap-1"><input type="number" placeholder="單價" value={txForm.price} onChange={e=>setTxForm({...txForm, price:e.target.value})} className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /><input type="number" placeholder="股數" value={txForm.shares} onChange={e=>setTxForm({...txForm, shares:e.target.value})} className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div></div>
+                                <button type="submit" className="w-full bg-slate-900 text-white font-bold py-2 rounded-lg text-xs hover:bg-slate-800">儲存資產</button>
                             </form>
-                            <div className="overflow-x-auto">
-                                <table className="w-full text-left text-sm"><thead className="text-xs text-slate-400 border-b border-slate-100"><tr><th className="pb-2">日期</th><th className="pb-2">股票標的</th><th className="pb-2">種類</th><th className="pb-2">單價</th><th className="pb-2">股數</th><th className="pb-2">操作</th></tr></thead>
-                                    <tbody className="divide-y divide-slate-100">
-                                        {transactions.map(t=>(<tr key={t.id} className="hover:bg-slate-50"><td className="py-3 text-xs font-mono text-slate-400">{t.date}</td><td className="py-3 font-bold">{t.symbol} <span className="text-xs text-slate-400 font-normal">({t.name})</span></td><td><span className={`px-2 py-0.5 rounded text-[10px] font-bold ${t.type==='BUY'?'bg-rose-50 text-rose-600':'bg-emerald-50 text-emerald-600'}`}>{t.type==='BUY'?'買入':'賣出'}</span></td><td className="py-3 font-mono">${t.price}</td><td className="py-3 font-mono">{t.shares} 股</td><td><button onClick={()=>setTransactions(transactions.filter(x=>x.id!==t.id))} className="text-slate-300 hover:text-rose-500">🗑️</button></td></tr>))}
-                                    </tbody>
-                                </table>
-                            </div>
+                            <table className="w-full text-left text-sm">
+                                <thead><tr className="text-slate-400 text-xs border-b">
+                                    <th className="pb-2">日期</th><th className="pb-2">標的</th><th className="pb-2">種類</th><th className="pb-2">單價</th><th className="pb-2">股數</th><th className="pb-2">刪除</th>
+                                </tr></thead>
+                                <tbody>
+                                    {transactions.map(t=>(<tr key={t.id} class="border-b"><td className="py-3 text-xs text-slate-400 font-mono">{t.date}</td><td className="py-3 font-bold">{t.symbol}</td><td>{t.type==='BUY'?'買入':'賣出'}</td><td className="py-3 font-mono">${t.price}</td><td className="py-3 font-mono">{t.shares}</td><td><button onClick={()=>setTransactions(transactions.filter(x=>x.id!==t.id))} className="text-slate-300 hover:text-rose-500">🗑️</button></td></tr>))}
+                                </tbody>
+                            </table>
                         </div>
                     )}
 
-                    {/* Tab 3: ✨ 完美啟用的配息智慧記帳本 ✨ */}
+                    {/* Tab 3: ✨ 完美解鎖的配息功能區 ✨ */}
                     {activeTab === 'dividend' && (
-                        <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm space-y-6 animate-fadeIn">
-                            <form onSubmit={(e)=>{e.preventDefault(); if(!divForm.symbol||!divForm.amount)return; setDividends([{...divForm, id:Date.now().toString()}, ...dividends]); setDivForm({date:new Date().toISOString().split('T')[0], market:'TW', symbol:'', amount:'', taxWithheld:'0', netAmount:''}); showToast('配息現金流已成功記帳！');}} className="grid grid-cols-1 sm:grid-cols-5 gap-3 items-end bg-slate-50 p-4 rounded-xl border border-slate-100">
-                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">除權息日期</label><input type="date" value={divForm.date} onChange={e=>setDivForm({...divForm, date:e.target.value})} className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div>
-                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">標的/市場</label><div className="flex gap-1"><input type="text" placeholder="代號" value={divForm.symbol} onChange={handleDivFormChange} name="symbol" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs uppercase" /><select value={divForm.market} onChange={handleDivFormChange} name="market" className="bg-white border border-slate-200 p-2 rounded-lg text-xs"><option value="TW">台</option><option value="US">美</option></select></div></div>
-                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">原始總配息 (毛利)</label><input type="number" placeholder="金額" value={divForm.amount} onChange={handleDivFormChange} name="amount" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div>
-                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">實收淨額 <span className="text-[10px] text-teal-600 font-normal">(已自動扣稅)</span></label><input type="number" value={divForm.netAmount} readOnly className="w-full bg-slate-100 border border-slate-200 p-2 rounded-lg text-xs font-bold text-teal-600" /></div>
-                                <button type="submit" className="w-full bg-slate-900 text-white font-bold py-2 rounded-lg text-xs transition hover:bg-slate-800">存入配息流水帳</button>
+                        <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm space-y-6">
+                            <form onSubmit={(e)=>{e.preventDefault(); if(!divForm.symbol||!divForm.amount)return; setDividends([{...divForm, id:Date.now().toString()}, ...dividends]); setDivForm({date:new Date().toISOString().split('T')[0], market:'TW', symbol:'', amount:'', taxWithheld:'0', netAmount:''});}} className="grid grid-cols-1 sm:grid-cols-5 gap-3 items-end bg-slate-50 p-4 rounded-xl border border-slate-100">
+                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">配息日期</label><input type="date" value={divForm.date} onChange={e=>setDivForm({...divForm, date:e.target.value})} className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div>
+                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">代號/市場</label><div className="flex gap-1"><input type="text" placeholder="0056" value={divForm.symbol} onChange={handleDivFormChange} name="symbol" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs uppercase font-mono" /><select value={divForm.market} onChange={handleDivFormChange} name="market" className="bg-white border border-slate-200 p-2 rounded-lg text-xs"><option value="TW">台</option><option value="US">美</option></select></div></div>
+                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">原始配息額</label><input type="number" placeholder="配息金額" value={divForm.amount} onChange={handleDivFormChange} name="amount" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div>
+                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">實收淨額 <span className="text-[10px] text-teal-600 font-normal">(扣稅後)</span></label><input type="number" value={divForm.netAmount} readOnly className="w-full bg-slate-100 border border-slate-200 p-2 rounded-lg text-xs font-bold text-teal-600 font-mono" /></div>
+                                <button type="submit" className="w-full bg-slate-900 text-white font-bold py-2 rounded-lg text-xs hover:bg-slate-800">存入配息本</button>
                             </form>
-
-                            {/* 配息流水明細列表 */}
-                            <div className="overflow-x-auto">
-                                <table className="w-full text-left text-sm"><thead className="text-xs text-slate-400 border-b border-slate-100"><tr><th className="pb-2">發放日</th><th className="pb-2">股票標的</th><th className="pb-2">市場</th><th className="pb-2">總配息 (毛)</th><th className="pb-2">代扣除 (稅/保費)</th><th className="pb-2">實收入帳淨額</th><th className="pb-2">操作</th></tr></thead>
-                                    <tbody className="divide-y divide-slate-100">
-                                        {dividends.map(d => (
-                                            <tr key={d.id} className="hover:bg-slate-50">
-                                                <td className="py-3 text-xs font-mono text-slate-400">{d.date}</td>
-                                                <td className="py-3 font-bold text-slate-800">{d.symbol}</td>
-                                                <td className="py-3 text-xs">{d.market === 'TW' ? '🇹🇼 台股' : '🇺🇸 美股'}</td>
-                                                <td className="py-3 font-mono text-slate-500">${d.amount}</td>
-                                                <td className="py-3 font-mono text-rose-500">-${d.taxWithheld}</td>
-                                                <td className="py-3 font-mono font-bold text-emerald-600">${d.netAmount}</td>
-                                                <td><button onClick={()=>setDividends(dividends.filter(x=>x.id!==d.id))} className="text-slate-300 hover:text-rose-500">🗑️</button></td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
+                            <table className="w-full text-left text-sm">
+                                <thead><tr className="text-slate-400 text-xs border-b">
+                                    <th className="pb-2">發放日</th><th className="pb-2">標的</th><th className="pb-2">市場</th><th className="pb-2">總配息</th><th className="pb-2">扣繳稅</th><th className="pb-2">入帳淨額</th><th className="pb-2">操作</th>
+                                </tr></thead>
+                                <tbody className="divide-y">
+                                    {dividends.map(d => (
+                                        <tr key={d.id} className="hover:bg-slate-50 text-slate-700">
+                                            <td className="py-3 text-xs font-mono text-slate-400">{d.date}</td>
+                                            <td className="py-3 font-bold">{d.symbol}</td>
+                                            <td className="py-3 text-xs">{d.market === 'TW' ? '🇹🇼 台股' : '🇺🇸 美股'}</td>
+                                            <td className="py-3 font-mono text-slate-500">${d.amount}</td>
+                                            <td className="py-3 font-mono text-rose-500">-${d.taxWithheld}</td>
+                                            <td className="py-3 font-mono font-bold text-emerald-600">${d.netAmount}</td>
+                                            <td><button onClick={()=>setDividends(dividends.filter(x=>x.id!==d.id))} className="text-slate-300 hover:text-rose-500">🗑️</button></td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
                         </div>
                     )}
 
-                    {/* Tab 4: 雲端授權設定 */}
                     {activeTab === 'drive' && (
                         <div className="max-w-md mx-auto bg-white border border-slate-100 rounded-2xl p-6 shadow-sm space-y-4">
-                            <h3 className="font-extrabold text-slate-800 text-sm">Google Drive 雲端同步設定</h3>
-                            <input type="text" placeholder="貼上 Google Client ID" value={gdriveClientId} onChange={e=>setGdriveClientId(e.target.value)} className="w-full bg-slate-50 border border-slate-200 p-3 rounded-xl text-xs font-mono text-slate-700 focus:outline-none focus:border-slate-400"/>
+                            <h3 className="font-extrabold text-slate-800 text-sm">Google Drive 雲端同步</h3>
+                            <input type="text" placeholder="貼上 Client ID" value={gdriveClientId} onChange={e=>setGdriveClientId(e.target.value)} className="w-full bg-slate-50 border border-slate-200 p-3 rounded-xl text-xs font-mono"/>
                             <button onClick={handleGoogleLogin} className="w-full bg-slate-900 text-white font-bold py-2.5 rounded-xl text-sm transition hover:bg-slate-800">🔑 授權登入 Google Drive</button>
                         </div>
                     )}
@@ -309,6 +291,7 @@
             );
         }
 
+        // 徹底修復變數名稱錯誤
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
     </script>
