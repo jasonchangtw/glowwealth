@@ -3,126 +3,109 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GlowWealth - 私人雲端雙市場資產追蹤</title>
+    <title>GlowWealth - 私人投資追蹤</title>
+    <!-- 引入 CSS 與核心套件 -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
-    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+        .animate-fadeIn { animation: fadeIn 0.5s ease-in; }
+    </style>
 </head>
 <body class="bg-slate-950 text-slate-100">
-
     <div id="root"></div>
 
     <script type="text/babel">
-        // 動態從 window 取得 Lucide 圖標
-        const { 
-          TrendingUp, PlusCircle, Trash2, Download, Upload, Cloud, Settings, 
-          PieChart, DollarSign, BrainCircuit, Calendar, Layers, RefreshCw, 
-          AlertTriangle, CheckCircle2, HelpCircle, FolderLock, ArrowUpDown, 
-          BookOpen, Copy, Smartphone, Laptop, Check, X 
-        } = {
-            TrendingUp: () => <span>📈</span>,
-            PlusCircle: () => <span>➕</span>,
-            Trash2: () => <span>🗑️</span>,
-            Download: () => <span>📥</span>,
-            Upload: () => <span>📤</span>,
-            Cloud: () => <span>☁️</span>,
-            Settings: () => <span>⚙️</span>,
-            PieChart: () => <span>📊</span>,
-            DollarSign: () => <span>💲</span>,
-            BrainCircuit: () => <span>🧠</span>,
-            Calendar: () => <span>📅</span>,
-            Layers: () => <span>🗂️</span>,
-            RefreshCw: () => <span>🔄</span>,
-            AlertTriangle: () => <span>⚠️</span>,
-            CheckCircle2: () => <span>✅</span>,
-            HelpCircle: () => <span>❓</span>,
-            FolderLock: () => <span>🔒</span>,
-            ArrowUpDown: () => <span>🔀</span>,
-            BookOpen: () => <span>📖</span>,
-            Copy: () => <span>📋</span>,
-            Smartphone: () => <span>📱</span>,
-            Laptop: () => <span>💻</span>,
-            Check: () => <span>✔️</span>,
-            X: () => <span>❌</span>
-        };
+        const { useState, useEffect } = React;
 
-        const TAIWAN_STOCK_NAMES = {
-          '2330': '台積電', '2317': '鴻海', '2454': '聯發科', '2382': '廣達',
-          '0050': '元大台灣50', '0056': '元大高股息', '00878': '國泰永續高股息',
-          '00919': '群益台灣精選高息', '00929': '復華台灣科技優息'
+        // 智慧名稱字典
+        const STOCK_NAMES = {
+          '2330': '台積電', '2317': '鴻海', 'AAPL': '蘋果', 'NVDA': '輝達', 'VOO': 'S&P 500 ETF'
         };
-
-        const US_STOCK_NAMES = {
-          'AAPL': '蘋果公司', 'TSLA': '特斯拉', 'NVDA': '輝達', 'MSFT': '微軟',
-          'VOO': 'S&P 500 ETF (Vanguard)', 'QQQ': '納斯達克100 ETF', 'VT': '全球股市 ETF'
-        };
-
-        const INITIAL_TRANSACTIONS = [
-          { id: '1', market: 'TW', symbol: '2330', name: '台積電', type: 'BUY', date: '2025-01-15', price: 920, shares: 1000, fee: 393, tax: 0, fxRate: 1 }
-        ];
 
         function App() {
-          const [transactions, setTransactions] = React.useState(INITIAL_TRANSACTIONS);
-          const [dividends, setDividends] = React.useState([]);
-          const [currentPrices, setCurrentPrices] = React.useState({'2330': { price: 980 }});
-          const [currency, setCurrency] = React.useState('TWD');
-          const [activeTab, setActiveTab] = React.useState('dashboard');
-          const [gdriveClientId, setGdriveClientId] = React.useState('');
+            const [activeTab, setActiveTab] = useState('dashboard');
+            const [transactions, setTransactions] = useState([]);
 
-          return (
-            <div className="p-6 max-w-7xl mx-auto space-y-6">
-              <div class="flex justify-between items-center bg-slate-900 p-4 rounded-xl border border-slate-800">
-                <div>
-                  <h1 class="text-2xl font-bold text-teal-400">GlowWealth 投資管家</h1>
-                  <p class="text-xs text-slate-400">已部署至你的 GitHub Pages，支援隨身跨設備同步</p>
-                </div>
-                <div class="flex gap-2">
-                   <button onClick={() => setCurrency('TWD')} class={`px-3 py-1 rounded ${currency==='TWD'?'bg-teal-500 text-slate-950':'bg-slate-800'}`}>TWD</button>
-                   <button onClick={() => setCurrency('USD')} class={`px-3 py-1 rounded ${currency==='USD'?'bg-teal-500 text-slate-950':'bg-slate-800'}`}>USD</button>
-                </div>
-              </div>
+            return (
+                <div className="min-h-screen p-4 md:p-8 animate-fadeIn">
+                    <header className="mb-8 flex justify-between items-center bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-2xl">
+                        <div>
+                            <h1 className="text-2xl font-bold bg-gradient-to-r from-teal-400 to-emerald-400 bg-clip-text text-transparent">
+                                GlowWealth 投資管家
+                            </h1>
+                            <p className="text-xs text-slate-500 mt-1">GitHub Pages 雲端部署版</p>
+                        </div>
+                        <div className="text-xs bg-slate-800 px-3 py-1 rounded-full text-slate-400">
+                            已連線至本機存儲
+                        </div>
+                    </header>
 
-              <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <button onClick={() => setActiveTab('dashboard')} class={`p-3 rounded-xl border ${activeTab==='dashboard'?'bg-teal-950/40 border-teal-500 text-teal-300':'border-slate-800 text-slate-400'}`}>📊 持股儀表板</button>
-                <button onClick={() => setActiveTab('ledger')} class={`p-3 rounded-xl border ${activeTab==='ledger'?'bg-teal-950/40 border-teal-500 text-teal-300':'border-slate-800 text-slate-400'}`}>📖 交易流水帳</button>
-                <button onClick={() => setActiveTab('drive')} class={`p-3 rounded-xl border ${activeTab==='drive'?'bg-sky-950/40 border-sky-500 text-sky-300':'border-slate-800 text-slate-400'}`}>☁️ Google Drive 跨端同步</button>
-              </div>
+                    <nav className="grid grid-cols-3 gap-3 mb-8">
+                        {['dashboard', 'ledger', 'drive'].map(tab => (
+                            <button 
+                                key={tab}
+                                onClick={() => setActiveTab(tab)}
+                                className={`py-3 rounded-xl border transition-all ${
+                                    activeTab === tab 
+                                    ? 'bg-teal-500/10 border-teal-500 text-teal-400 shadow-[0_0_15px_rgba(20,184,166,0.2)]' 
+                                    : 'bg-slate-900 border-slate-800 text-slate-500 hover:border-slate-700'
+                                }`}
+                            >
+                                {tab === 'dashboard' ? '📊 儀表板' : tab === 'ledger' ? '📖 記帳本' : '☁️ 雲端同步'}
+                            </button>
+                        ))}
+                    </nav>
 
-              {activeTab === 'dashboard' && (
-                <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
-                  <h3 class="font-bold text-lg text-slate-200 mb-3">現有庫存資產</h3>
-                  <div class="text-xs text-slate-400">系統已成功在 GitHub 開啟，你可以切換至「交易流水帳」開始記帳。資料將自動保存於你的本機。</div>
-                </div>
-              )}
+                    <main className="bg-slate-900 border border-slate-800 rounded-2xl p-6 min-h-[300px] shadow-xl">
+                        {activeTab === 'dashboard' && (
+                            <div className="text-center py-12">
+                                <div className="text-5xl mb-4">📈</div>
+                                <h2 className="text-xl font-bold mb-2">歡迎使用您的資產帳簿</h2>
+                                <p className="text-slate-500 text-sm">點擊「記帳本」開始記錄您的第一筆投資。</p>
+                            </div>
+                        )}
 
-              {activeTab === 'ledger' && (
-                <div class="bg-slate-900 border border-slate-800 rounded-xl p-5">
-                  <h3 class="font-bold text-lg text-slate-200 mb-3">交易記帳本</h3>
-                  <p class="text-sm text-slate-400">（在此處可以隨時記錄每一筆買入、賣出的歷史交易）</p>
-                </div>
-              )}
+                        {activeTab === 'ledger' && (
+                            <div>
+                                <h3 className="font-bold mb-4 flex justify-between items-center">
+                                    <span>交易紀錄</span>
+                                    <button className="text-xs bg-teal-500 text-slate-950 px-3 py-1 rounded-lg font-bold">新增交易</button>
+                                </h3>
+                                <div className="bg-slate-950/50 rounded-xl p-8 text-center text-slate-600 text-sm border border-slate-800/50">
+                                    目前尚無交易明細
+                                </div>
+                            </div>
+                        )}
 
-              {activeTab === 'drive' && (
-                <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
-                  <h3 class="font-bold text-lg text-slate-200">Google Drive 跨設備設定</h3>
-                  <input 
-                    type="text" 
-                    placeholder="貼上你的 Google Client ID" 
-                    value={gdriveClientId}
-                    onChange={(e)=>setGdriveClientId(e.target.value)}
-                    class="w-full bg-slate-950 border border-slate-800 rounded-lg p-2 text-sm text-mono"
-                  />
-                  <div class="text-xs text-slate-400 leading-relaxed">
-                    💡 跨設備同步超簡單：在這台電腦記完帳點選「備份」，換到另一台電腦打開 GitHub 網址，輸入一樣的 ID 並點擊「還原」，資料就同步過來了！
-                  </div>
+                        {activeTab === 'drive' && (
+                            <div className="max-w-md mx-auto space-y-6 py-4">
+                                <div className="bg-sky-500/10 border border-sky-500/20 p-4 rounded-xl text-sky-400 text-xs">
+                                    <strong>💡 跨設備同步：</strong><br/>
+                                    請在此輸入 Google Client ID，即可將資料同步至您的個人雲端硬碟。
+                                </div>
+                                <input 
+                                    type="text" 
+                                    placeholder="貼上 Client ID..." 
+                                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm focus:outline-none focus:border-sky-500"
+                                />
+                                <button className="w-full bg-sky-600 hover:bg-sky-500 text-white font-bold py-3 rounded-xl transition">
+                                    授權登入 Google Drive
+                                </button>
+                            </div>
+                        )}
+                    </main>
+
+                    <footer className="mt-12 text-center text-[10px] text-slate-600 uppercase tracking-widest">
+                        Your Privacy, Your Drive. No Database Required.
+                    </footer>
                 </div>
-              )}
-            </div>
-          );
+            );
         }
 
-        const root = tragedies = ReactDOM.createRoot(document.getElementById('root'));
+        const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
     </script>
 </body>
