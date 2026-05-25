@@ -20,7 +20,6 @@
     <script type="text/babel">
         const { useState, useEffect, useMemo } = React;
 
-        // 您擁有的完整台美股自訂名稱字典
         const STOCK_NAMES = {
           '0050': '元大台灣50', '00878': '國泰永續高股息', '00929': '復華台灣科技優息', '2330': '台積電',
           '00919': '群益台灣精選高息', '6438': '訊得機械', '2881': '富邦金控', '8462': '柏文', '009811': '統一美國50',
@@ -35,30 +34,52 @@
             { month: '7月', value: 19300 }, { month: '8月', value: 19480 }
         ];
 
+        // ============ Error Boundary：攔截任何渲染錯誤，防止全頁白屏 ============
+        class ErrorBoundary extends React.Component {
+            constructor(props) {
+                super(props);
+                this.state = { hasError: false, error: null };
+            }
+            static getDerivedStateFromError(error) {
+                return { hasError: true, error };
+            }
+            render() {
+                if (this.state.hasError) {
+                    return (
+                        <div className="flex flex-col items-center justify-center min-h-screen text-slate-500 p-8 gap-4">
+                            <div className="text-5xl">⚠️</div>
+                            <div className="text-lg font-black text-slate-800">渲染發生錯誤，已安全攔截</div>
+                            <div className="text-xs text-slate-400 font-mono bg-slate-100 px-4 py-2 rounded-xl max-w-lg break-all">{String(this.state.error)}</div>
+                            <button onClick={() => this.setState({ hasError: false, error: null })} className="bg-slate-900 text-white px-6 py-2.5 rounded-xl text-sm font-bold hover:bg-slate-800 transition">重試</button>
+                        </div>
+                    );
+                }
+                return this.props.children;
+            }
+        }
+
         function App() {
             const [activeTab, setActiveTab] = useState('dashboard');
-            const [exchangeRate, setExchangeRate] = useState(31.2); 
-            const [priceData, setPriceData] = useState({}); 
+            const [exchangeRate, setExchangeRate] = useState(31.2);
+            const [priceData, setPriceData] = useState({});
             const [priceStatus, setPriceStatus] = useState('載入中');
-            
-            const [twDiscount] = useState(0.2); 
-            const [usBuyFeeConfig] = useState(0.09); 
 
-            // 安全防崩潰快取載入機制
+            const [twDiscount] = useState(0.2);
+            const [usBuyFeeConfig] = useState(0.09);
+
             const [transactions, setTransactions] = useState(() => {
                 try { return JSON.parse(localStorage.getItem('gw_v15_txs') || '[]'); } catch(e) { return []; }
             });
             const [dividends, setDividends] = useState(() => {
                 try { return JSON.parse(localStorage.getItem('gw_v15_divs') || '[]'); } catch(e) { return []; }
             });
-            
+
             const [gdriveClientId, setGdriveClientId] = useState(() => localStorage.getItem('gw_client_id') || '');
             const [gdriveToken, setGdriveToken] = useState(null);
             const [gdriveUser, setGdriveUser] = useState(null);
             const [syncStatus, setSyncStatus] = useState('本機模式');
             const [isSyncing, setIsSyncing] = useState(false);
-
-            const [cloudFiles, setCloudFiles] = useState([]); 
+            const [cloudFiles, setCloudFiles] = useState([]);
             const [selectedFileId, setSelectedFileId] = useState('');
 
             const [txForm, setTxForm] = useState({ date: new Date().toISOString().split('T')[0], symbol: '', type: 'BUY', price: '', shares: '', fee: '20', tax: '0', txRate: '1' });
@@ -70,8 +91,8 @@
                 localStorage.setItem('gw_client_id', gdriveClientId);
             }, [transactions, dividends, gdriveClientId]);
 
-            // 自動實時網路抓價
             const fetchFinancialData = async () => {
+                setPriceStatus('更新中...');
                 try {
                     const fxRes = await fetch('https://open.er-api.com/v6/latest/USD');
                     const fxData = await fxRes.json();
@@ -79,57 +100,64 @@
                         setExchangeRate(parseFloat(fxData.rates.TWD.toFixed(2)));
                     }
 
-                    if (!transactions || transactions.length === 0) { setPriceStatus('實際'); return; }
-                    const symbols = [...new Set(transactions.filter(t => t && t.symbol).map(t => t.symbol.toUpperCase().trim()))];
-                    
+                    // 從 localStorage 讀取最新 transactions，避免 closure 舊值問題
+                    const currentTxs = JSON.parse(localStorage.getItem('gw_v15_txs') || '[]');
+                    if (!currentTxs || currentTxs.length === 0) { setPriceStatus('實際'); return; }
+
+                    const symbols = [...new Set(currentTxs.filter(t => t && t.symbol).map(t => t.symbol.toUpperCase().trim()))];
                     const fetchedPrices = {};
+
                     for (const sym of symbols) {
                         if (!sym) continue;
                         try {
                             let price = 0;
                             const isAmerican = isNaN(sym) && !sym.endsWith('A');
-                            if (isAmerican) { 
-                                const yfUrl = `https://query1.financeapi.com/v7/finance/quote?symbols=${sym}`;
+                            if (isAmerican) {
+                                // 修正：正確的 Yahoo Finance URL（原本 financeapi.com 是錯的）
+                                const yfUrl = `https://query1.finance.yahoo.com/v7/finance/quote?symbols=${sym}`;
                                 const proxyRes = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(yfUrl)}`);
                                 const proxyData = await proxyRes.json();
                                 const json = JSON.parse(proxyData.contents);
                                 price = json?.quoteResponse?.result?.[0]?.regularMarketPrice || 0;
                             } else {
-                                const cleanSym = sym.replace('A', '');
+                                const cleanSym = sym.replace(/A$/, '');
                                 const twRes = await fetch(`https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=${cleanSym}&start_date=${new Date(Date.now() - 6*24*60*60*1000).toISOString().split('T')[0]}`);
                                 const twData = await twRes.json();
                                 if (twData?.data && twData.data.length > 0) price = twData.data[twData.data.length - 1].close || 0;
                             }
                             if (price > 0) fetchedPrices[sym] = price;
-                        } catch (err) { console.error(err); }
+                        } catch (err) { console.error('Price fetch failed:', sym, err); }
                     }
-                    setPriceData(fetchedPrices);
+                    // 合併舊資料，避免部分失敗時清空已有現價
+                    setPriceData(prev => ({ ...prev, ...fetchedPrices }));
                     setPriceStatus('實際');
-                } catch (e) { setPriceStatus('斷線備援'); }
+                } catch (e) { console.error(e); setPriceStatus('斷線備援'); }
             };
 
-            useEffect(() => { fetchFinancialData(); }, [transactions]);
+            // 只在初次載入時抓價；後續由「刷新現價」按鈕手動觸發，避免每次記帳都重打 API
+            useEffect(() => { fetchFinancialData(); }, []);
 
-            // ==================== 🛠️ 鋼鐵核心大腦 (數據強制防錯轉型) ====================
+            // ==================== 鋼鐵核心大腦 ====================
             const portfolio = useMemo(() => {
                 const summary = {};
                 if (!transactions || !Array.isArray(transactions)) return [];
-                
+
                 const sortedTx = [...transactions].filter(t => t && t.symbol).sort((a, b) => new Date(a.date) - new Date(b.date));
 
                 sortedTx.forEach(tx => {
-                    const { symbol, market, name, type, price, shares, fee, tax, txRate } = tx;
+                    const { symbol, name, type, price, shares, fee, tax, txRate } = tx;
                     const cleanSymbol = symbol.toUpperCase().trim();
                     const isUs = isNaN(cleanSymbol) && !cleanSymbol.endsWith('A');
 
                     if (!summary[cleanSymbol]) {
-                        summary[cleanSymbol] = { 
-                            symbol: cleanSymbol, name: STOCK_NAMES[cleanSymbol] || name || cleanSymbol, market: isUs ? 'US' : 'TW', 
+                        summary[cleanSymbol] = {
+                            symbol: cleanSymbol, name: STOCK_NAMES[cleanSymbol] || name || cleanSymbol, market: isUs ? 'US' : 'TW',
                             totalShares: 0, totalBuyShares: 0, totalBuyCostTwd: 0, realizedProfitTwd: 0
                         };
                     }
-                    
-                    const s = parseFloat(shares || 0); const p = parseFloat(price || 0); const f = parseFloat(fee || 0); const t = parseFloat(tax || 0);
+
+                    const s = parseFloat(shares || 0); const p = parseFloat(price || 0);
+                    const f = parseFloat(fee || 0); const t2 = parseFloat(tax || 0);
                     const rate = parseFloat(txRate || (isUs ? exchangeRate : 1));
 
                     if (type === 'BUY') {
@@ -137,7 +165,7 @@
                         summary[cleanSymbol].totalBuyCostTwd += ((s * p) + f) * (isUs ? rate : 1);
                     } else if (type === 'SELL') {
                         const currentAvgCostTwd = summary[cleanSymbol].totalShares > 0 ? (summary[cleanSymbol].totalBuyCostTwd / summary[cleanSymbol].totalBuyShares) : 0;
-                        const sellRevenueTwd = ((s * p) - f - t) * (isUs ? rate : 1);
+                        const sellRevenueTwd = ((s * p) - f - t2) * (isUs ? rate : 1);
                         summary[cleanSymbol].realizedProfitTwd += sellRevenueTwd - (s * currentAvgCostTwd);
                         summary[cleanSymbol].totalShares -= s;
                     }
@@ -149,8 +177,10 @@
                     const avgBuyCostTwd = item.totalBuyShares > 0 ? (item.totalBuyCostTwd / item.totalBuyShares) : 0;
                     const currentInvestCostTwd = currentShares * avgBuyCostTwd;
                     const currentMarketValueTwd = currentShares * livePrice * (item.market === 'US' ? exchangeRate : 1);
-                    
-                    const itemDivsTwd = dividends ? dividends.filter(d => d && d.symbol && d.symbol.toUpperCase().trim() === item.symbol).reduce((sum, d) => sum + parseFloat(d.netAmount || 0) * (d.market === 'US' ? exchangeRate : 1), 0) : 0;
+
+                    const itemDivsTwd = dividends ? dividends.filter(d => d && d.symbol && d.symbol.toUpperCase().trim() === item.symbol)
+                        .reduce((sum, d) => sum + parseFloat(d.netAmount || 0) * (d.market === 'US' ? exchangeRate : 1), 0) : 0;
+
                     const totalProfitTwd = (currentMarketValueTwd - currentInvestCostTwd) + item.realizedProfitTwd + itemDivsTwd;
                     const roi = currentInvestCostTwd > 0 ? (totalProfitTwd / currentInvestCostTwd) * 100 : 0;
 
@@ -158,11 +188,11 @@
                     const historicalRate = matchTx ? parseFloat(matchTx.txRate || exchangeRate) : exchangeRate;
 
                     return {
-                        ...item, currentShares, 
+                        ...item, currentShares,
                         avgBuyCost: item.market === 'TW' ? avgBuyCostTwd : (avgBuyCostTwd / (historicalRate || exchangeRate)),
                         currentPrice: livePrice || (matchTx ? parseFloat(matchTx.price || 0) : 0),
                         currentInvestCost: item.market === 'TW' ? currentInvestCostTwd : (currentInvestCostTwd / (historicalRate || exchangeRate)),
-                        currentMarketValue: item.market === 'TW' ? currentMarketValueTwd : (currentShares * (livePrice || (matchTx ? parseFloat(matchTx.price || 0) : 0))), 
+                        currentMarketValue: item.market === 'TW' ? currentMarketValueTwd : (currentShares * (livePrice || (matchTx ? parseFloat(matchTx.price || 0) : 0))),
                         accumulatedDividend: item.market === 'TW' ? itemDivsTwd : (itemDivsTwd / exchangeRate),
                         totalProfit: item.market === 'TW' ? totalProfitTwd : (totalProfitTwd / exchangeRate), roi
                     };
@@ -185,16 +215,81 @@
                     totalValue: isBookEmpty ? 19480 : totalValueTwd,
                     roi: isBookEmpty ? 4.18 : (totalCostTwd > 0 ? (totalProfitTwd / totalCostTwd) * 100 : 0),
                     divIncome: dividends && dividends.length > 0 ? dividends.reduce((sum, d) => sum + (d ? parseFloat(d.netAmount || 0) : 0) * (d && d.market === 'TW' ? 1 : exchangeRate), 0) : 192,
-                    twWeight: totalValueTwd > 0 ? (twValue / totalValueTwd) * 100 : 35.2, usWeight: totalValueTwd > 0 ? (usValue / totalValueTwd) * 100 : 64.8
+                    twWeight: totalValueTwd > 0 ? (twValue / totalValueTwd) * 100 : 35.2,
+                    usWeight: totalValueTwd > 0 ? (usValue / totalValueTwd) * 100 : 64.8
                 };
             }, [portfolio, dividends, exchangeRate, transactions]);
 
             const refreshCloudFileList = async (token) => {
                 try {
-                    const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=name contains 'glowwealth_backup_' and trashed=false&orderBy=name desc&fields=files(id, name, createdTime)`, { headers: { Authorization: `Bearer ${token}` } });
+                    const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=name contains 'glowwealth_backup_' and trashed=false&orderBy=name desc&fields=files(id,name,createdTime)`, {
+                        headers: { Authorization: `Bearer ${token}` }
+                    });
                     const data = await res.json();
                     if (data?.files) { setCloudFiles(data.files); if (data.files.length > 0) setSelectedFileId(data.files[0].id); }
-                } catch (e) {}
+                } catch (e) { console.error(e); }
+            };
+
+            const handleGoogleSignIn = () => {
+                if (!gdriveClientId.trim()) { alert('請先輸入 Google Client ID'); return; }
+                try {
+                    const client = google.accounts.oauth2.initTokenClient({
+                        client_id: gdriveClientId.trim(),
+                        scope: 'https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/userinfo.email',
+                        callback: async (response) => {
+                            if (response.access_token) {
+                                setGdriveToken(response.access_token);
+                                try {
+                                    const userRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: `Bearer ${response.access_token}` } });
+                                    const userData = await userRes.json();
+                                    setGdriveUser(userData);
+                                    setSyncStatus(`雲端已連線：${userData.email || ''}`);
+                                } catch { setSyncStatus('雲端已連線'); }
+                                refreshCloudFileList(response.access_token);
+                            }
+                        }
+                    });
+                    client.requestAccessToken();
+                } catch (e) { alert('Google Sign-In 初始化失敗，請確認 Client ID 正確'); }
+            };
+
+            const handleSignOut = () => {
+                if (gdriveToken) { try { google.accounts.oauth2.revoke(gdriveToken, () => {}); } catch(e) {} }
+                setGdriveToken(null); setGdriveUser(null); setCloudFiles([]); setSelectedFileId(''); setSyncStatus('本機模式');
+            };
+
+            const handleSaveToCloud = async () => {
+                if (!gdriveToken) { alert('請先登入 Google Drive'); return; }
+                setIsSyncing(true); setSyncStatus('備份中...');
+                try {
+                    const payload = JSON.stringify({ transactions, dividends, savedAt: new Date().toISOString() });
+                    const fileName = `glowwealth_backup_${new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)}.json`;
+                    const form = new FormData();
+                    form.append('metadata', new Blob([JSON.stringify({ name: fileName, mimeType: 'application/json' })], { type: 'application/json' }));
+                    form.append('file', new Blob([payload], { type: 'application/json' }));
+                    const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+                        method: 'POST', headers: { Authorization: `Bearer ${gdriveToken}` }, body: form
+                    });
+                    if (res.ok) { setSyncStatus('備份成功 ✓'); await refreshCloudFileList(gdriveToken); }
+                    else { setSyncStatus('備份失敗'); }
+                } catch (e) { setSyncStatus('備份失敗'); console.error(e); }
+                setIsSyncing(false);
+            };
+
+            const handleLoadFromCloud = async () => {
+                if (!gdriveToken || !selectedFileId) { alert('請選擇要還原的備份檔案'); return; }
+                if (!confirm('確定要從雲端還原？本機資料將被覆蓋。')) return;
+                setIsSyncing(true); setSyncStatus('還原中...');
+                try {
+                    const res = await fetch(`https://www.googleapis.com/drive/v3/files/${selectedFileId}?alt=media`, {
+                        headers: { Authorization: `Bearer ${gdriveToken}` }
+                    });
+                    const data = await res.json();
+                    if (data.transactions) setTransactions(data.transactions);
+                    if (data.dividends) setDividends(data.dividends);
+                    setSyncStatus('還原成功 ✓');
+                } catch (e) { setSyncStatus('還原失敗'); console.error(e); }
+                setIsSyncing(false);
             };
 
             const handleFormInput = (e) => {
@@ -219,13 +314,28 @@
                 setTxForm(updated);
             };
 
+            const handleDivInput = (e) => {
+                const { name, value } = e.target;
+                let updated = { ...divForm, [name]: value };
+                if (name === 'amount' || name === 'taxWithheld') {
+                    const amt = parseFloat(name === 'amount' ? value : updated.amount) || 0;
+                    const tax = parseFloat(name === 'taxWithheld' ? value : updated.taxWithheld) || 0;
+                    updated.netAmount = (amt - tax).toFixed(2);
+                }
+                setDivForm(updated);
+            };
+
             return (
                 <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-6">
                     {/* 控制列 */}
                     <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-200 pb-4">
-                        <div><div className="text-xs text-slate-400 font-mono font-bold uppercase tracking-wider">網際全自動智慧防呆精密精算面板</div><h1 className="text-3xl font-black text-slate-900 tracking-tight mt-1">家庭總覽</h1></div>
+                        <div>
+                            <div className="text-xs text-slate-400 font-mono font-bold uppercase tracking-wider">網際全自動智慧防呆精密精算面板</div>
+                            <h1 className="text-3xl font-black text-slate-900 tracking-tight mt-1">家庭總覽</h1>
+                        </div>
                         <div className="flex flex-wrap gap-2">
                             <span className="px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-200/60 text-slate-600">{syncStatus}</span>
+                            <span className="px-3 py-1.5 rounded-xl text-xs font-bold bg-blue-50 text-blue-600">{priceStatus}</span>
                             <button onClick={fetchFinancialData} className="bg-white border border-slate-200 hover:bg-slate-50 px-3 py-1.5 rounded-xl text-xs font-bold shadow-sm text-slate-700 transition">🔄 刷新現價</button>
                             <button onClick={() => setActiveTab('ledger')} className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-1.5 rounded-xl text-xs font-bold shadow-md transition">＋ 新增紀錄</button>
                         </div>
@@ -233,11 +343,13 @@
 
                     <div className="flex gap-1 bg-slate-200/50 p-1 rounded-xl w-full md:w-80">
                         {['dashboard', 'ledger', 'dividend', 'drive'].map(t => (
-                            <button key={t} onClick={() => setActiveTab(t)} className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${activeTab === t ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>{t==='dashboard'?'總覽':t==='ledger'?'記帳':t==='dividend'?'配息':'同步'}</button>
+                            <button key={t} onClick={() => setActiveTab(t)} className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${activeTab === t ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>
+                                {t==='dashboard'?'總覽':t==='ledger'?'記帳':t==='dividend'?'配息':'同步'}
+                            </button>
                         ))}
                     </div>
 
-                    {/* Dashboard */}
+                    {/* Tab: 總覽 */}
                     {activeTab === 'dashboard' && (
                         <div className="space-y-6">
                             <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
@@ -259,13 +371,18 @@
                                         </thead>
                                         <tbody className="divide-y divide-slate-100 font-medium">
                                             {portfolio.length === 0 ? (
-                                                <tr><td className="p-3 font-bold font-mono">2330</td><td className="p-3">台積電</td><td className="p-3 font-mono">120</td><td className="p-3 font-mono">$711.13</td><td className="p-3 font-mono">$2,310.00</td><td className="p-3 font-mono">$85,335.00</td><td className="p-3 font-mono">$277,200.00</td><td className="p-3 font-mono text-amber-600">$3,014.00</td><td className="p-3 font-mono text-emerald-600">$0.00</td><td className="p-3 font-mono text-rose-600">+$3,014.00</td><td className="p-3 text-center"><span className="px-2 py-1 rounded font-bold text-rose-600 bg-rose-50">+224.84%</span></td></tr>
+                                                <tr>
+                                                    <td className="p-3 font-bold font-mono">2330</td><td className="p-3">台積電</td><td className="p-3 font-mono">120</td>
+                                                    <td className="p-3 font-mono">$711.13</td><td className="p-3 font-mono">$2,310.00</td><td className="p-3 font-mono">$85,335.00</td>
+                                                    <td className="p-3 font-mono">$277,200.00</td><td className="p-3 font-mono text-amber-600">$3,014.00</td>
+                                                    <td className="p-3 font-mono text-emerald-600">$0.00</td><td className="p-3 font-mono text-rose-600">+$3,014.00</td>
+                                                    <td className="p-3 text-center"><span className="px-2 py-1 rounded font-bold text-rose-600 bg-rose-50">+224.84%</span></td>
+                                                </tr>
                                             ) : (
                                                 portfolio.map(p => (
                                                     <tr key={p.symbol} className="hover:bg-slate-50 transition">
                                                         <td className="p-3 font-bold font-mono text-slate-900">{p.symbol}</td>
                                                         <td className="p-3 text-slate-600">{p.name || p.symbol}</td>
-                                                        {/* ✨ 終極安全防護：強行在所有渲染點綁定轉型與安全備援機制，絕不白屏 ✨ */}
                                                         <td className="p-3 font-mono text-slate-800">{String(p.currentShares || 0)}</td>
                                                         <td className="p-3 font-mono text-slate-600">${Number(p.avgBuyCost || 0).toFixed(2)}</td>
                                                         <td className="p-3 font-mono text-blue-600 font-bold">${Number(p.currentPrice || 0).toFixed(2)}</td>
@@ -274,7 +391,7 @@
                                                         <td className="p-3 font-mono text-amber-600">${Number(p.accumulatedDividend || 0).toFixed(2)}</td>
                                                         <td className="p-3 font-mono text-emerald-600">${Number((p.realizedProfitTwd || 0) / (p.market === 'TW' ? 1 : exchangeRate)).toFixed(2)}</td>
                                                         <td className={`p-3 font-mono font-bold ${Number(p.totalProfit || 0) >= 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{Number(p.totalProfit || 0) >= 0 ? '+' : ''}{Number(p.totalProfit || 0).toFixed(2)}</td>
-                                                        <td className="p-3 text-center"><span className={`px-2 py-0.5 rounded font-bold ${Number(p.totalProfit || 0) >= 0 ? 'text-rose-600 bg-rose-50' : 'text-emerald-600 bg-emerald-50'}`}>{Number(p.totalProfit || 0) >= 0 ? '+' : ''}{Number(p.roi || 0).toFixed(2)}%</span></td>
+                                                        <td className="p-3 text-center"><span className={`px-2 py-0.5 rounded font-bold ${Number(p.roi || 0) >= 0 ? 'text-rose-600 bg-rose-50' : 'text-emerald-600 bg-emerald-50'}`}>{Number(p.roi || 0) >= 0 ? '+' : ''}{Number(p.roi || 0).toFixed(2)}%</span></td>
                                                     </tr>
                                                 ))
                                             )}
@@ -285,10 +402,16 @@
                         </div>
                     )}
 
-                    {/* Tab 2: 記帳 */}
+                    {/* Tab: 記帳 */}
                     {activeTab === 'ledger' && (
                         <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm space-y-6">
-                            <form onSubmit={(e)=>{e.preventDefault(); if(!txForm.symbol||!txForm.price||!txForm.shares)return; const isUs=isNaN(txForm.symbol)&&!txForm.symbol.endsWith('A'); setTransactions([{...txForm, id:Date.now().toString(), market: isUs?'US':'TW', name:STOCK_NAMES[txForm.symbol.toUpperCase().trim()]||txForm.symbol}, ...transactions]); setTxForm({date:new Date().toISOString().split('T')[0], symbol:'', type:'BUY', price:'', shares:'', fee:'20', tax:'0', txRate:'1'});}} className="grid grid-cols-1 sm:grid-cols-4 gap-4 items-end bg-slate-50 p-5 rounded-2xl border border-slate-100">
+                            <form onSubmit={(e) => {
+                                e.preventDefault();
+                                if (!txForm.symbol || !txForm.price || !txForm.shares) return;
+                                const isUs = isNaN(txForm.symbol) && !txForm.symbol.endsWith('A');
+                                setTransactions([{ ...txForm, id: Date.now().toString(), market: isUs ? 'US' : 'TW', name: STOCK_NAMES[txForm.symbol.toUpperCase().trim()] || txForm.symbol }, ...transactions]);
+                                setTxForm({ date: new Date().toISOString().split('T')[0], symbol: '', type: 'BUY', price: '', shares: '', fee: '20', tax: '0', txRate: '1' });
+                            }} className="grid grid-cols-1 sm:grid-cols-4 gap-4 items-end bg-slate-50 p-5 rounded-2xl border border-slate-100">
                                 <div><label className="text-[11px] font-bold text-slate-500 block mb-1">交易日期</label><input type="date" value={txForm.date} onChange={handleFormInput} name="date" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div>
                                 <div><label className="text-[11px] font-bold text-slate-500 block mb-1">標的代號</label><input type="text" placeholder="如 00878 / QQQ / 5289" value={txForm.symbol} onChange={handleFormInput} name="symbol" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs uppercase font-mono font-bold" /></div>
                                 <div><label className="text-[11px] font-bold text-slate-500 block mb-1">種類</label><select value={txForm.type} onChange={handleFormInput} name="type" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs font-bold"><option value="BUY">買入</option><option value="SELL">賣出</option></select></div>
@@ -296,17 +419,134 @@
                                 <div className="sm:col-span-3 grid grid-cols-1 sm:grid-cols-3 gap-3 bg-white/80 p-3 rounded-xl border border-slate-200/60 text-xs text-slate-500">
                                     <div>富邦手續費自動精算：<span className="font-mono font-bold text-slate-800">${txForm.fee}</span></div>
                                     <div>預估證交稅/規費：<span className="font-mono font-bold text-rose-500">${txForm.tax}</span></div>
-                                    <div><label className="block text-[10px] text-slate-400 font-bold mb-0.5">💡 扣款當日實際匯率</label><input type="number" step="any" value={txForm.txRate} onChange={handleFormInput} name="txRate" disabled={!(isNaN(txForm.symbol)&&!txForm.symbol.endsWith('A'))} className="w-full bg-slate-50 border border-slate-200 px-2 py-0.5 rounded text-slate-800 font-mono font-bold text-center disabled:opacity-40" /></div>
+                                    <div><label className="block text-[10px] text-slate-400 font-bold mb-0.5">💡 扣款當日實際匯率</label><input type="number" step="any" value={txForm.txRate} onChange={handleFormInput} name="txRate" disabled={!(isNaN(txForm.symbol) && !txForm.symbol.endsWith('A'))} className="w-full bg-slate-50 border border-slate-200 px-2 py-0.5 rounded text-slate-800 font-mono font-bold text-center disabled:opacity-40" /></div>
                                 </div>
                                 <button type="submit" className="w-full bg-slate-900 text-white font-bold py-2.5 rounded-xl text-xs hover:bg-slate-800 shadow">儲存交易資產</button>
                             </form>
                             <div className="overflow-x-auto">
                                 <table className="w-full text-left text-sm">
-                                    <thead><tr className="text-slate-400 text-xs border-b"><th>日期</th><th>標的</th><th>市場</th><th>種類</th><th>單價</th><th>股數</th><th>扣款匯率</th><th>操作</th></tr></thead>
+                                    <thead><tr className="text-slate-400 text-xs border-b pb-2"><th className="pb-2">日期</th><th className="pb-2">標的</th><th className="pb-2">市場</th><th className="pb-2">種類</th><th className="pb-2">單價</th><th className="pb-2">股數</th><th className="pb-2">扣款匯率</th><th className="pb-2">操作</th></tr></thead>
                                     <tbody>
-                                        {transactions.map(t=>(<tr key={t.id} className="border-b"><td className="py-3 text-xs text-slate-400 font-mono">{t.date}</td><td className="py-3 font-bold">{t.symbol}</td><td className="text-xs">{t.market==='US'?'🇺🇸 美股':'🇹🇼 台股'}</td><td><span className={`px-2 py-0.5 rounded text-[10px] font-bold ${t.type==='BUY'?'bg-rose-50 text-rose-600':'bg-emerald-50 text-emerald-600'}`}>{t.type==='BUY'?'買入':'賣出'}</span></td><td className="py-3 font-mono">${t.price}</td><td className="py-3 font-mono">{t.shares}</td><td className="py-3 font-mono text-slate-500">{t.market==='TW'?'1.00':t.txRate}</td><td><button onClick={()=>setTransactions(transactions.filter(x=>x.id!==t.id))} className="text-slate-300 hover:text-rose-500">🗑️</button></td></tr>))}
+                                        {transactions.length === 0 && <tr><td colSpan="8" className="py-8 text-center text-slate-400 text-xs">尚無交易紀錄</td></tr>}
+                                        {transactions.map(t => (
+                                            <tr key={t.id} className="border-b hover:bg-slate-50">
+                                                <td className="py-3 text-xs text-slate-400 font-mono">{t.date}</td>
+                                                <td className="py-3 font-bold">{t.symbol}</td>
+                                                <td className="text-xs">{t.market === 'US' ? '🇺🇸 美股' : '🇹🇼 台股'}</td>
+                                                <td><span className={`px-2 py-0.5 rounded text-[10px] font-bold ${t.type === 'BUY' ? 'bg-rose-50 text-rose-600' : 'bg-emerald-50 text-emerald-600'}`}>{t.type === 'BUY' ? '買入' : '賣出'}</span></td>
+                                                <td className="py-3 font-mono">${t.price}</td>
+                                                <td className="py-3 font-mono">{t.shares}</td>
+                                                <td className="py-3 font-mono text-slate-500">{t.market === 'TW' ? '1.00' : t.txRate}</td>
+                                                <td><button onClick={() => setTransactions(transactions.filter(x => x.id !== t.id))} className="text-slate-300 hover:text-rose-500 transition">🗑️</button></td>
+                                            </tr>
+                                        ))}
                                     </tbody>
                                 </table>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Tab: 配息 */}
+                    {activeTab === 'dividend' && (
+                        <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm space-y-6">
+                            <form onSubmit={(e) => {
+                                e.preventDefault();
+                                if (!divForm.symbol || !divForm.amount) return;
+                                const netAmt = divForm.netAmount !== '' ? divForm.netAmount : (parseFloat(divForm.amount || 0) - parseFloat(divForm.taxWithheld || 0)).toFixed(2);
+                                setDividends([{ ...divForm, id: Date.now().toString(), netAmount: netAmt }, ...dividends]);
+                                setDivForm({ date: new Date().toISOString().split('T')[0], market: 'TW', symbol: '', amount: '', taxWithheld: '0', netAmount: '' });
+                            }} className="grid grid-cols-1 sm:grid-cols-4 gap-4 items-end bg-slate-50 p-5 rounded-2xl border border-slate-100">
+                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">配息日期</label><input type="date" value={divForm.date} onChange={handleDivInput} name="date" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div>
+                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">市場</label><select value={divForm.market} onChange={handleDivInput} name="market" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs font-bold"><option value="TW">🇹🇼 台股</option><option value="US">🇺🇸 美股</option></select></div>
+                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">標的代號</label><input type="text" placeholder="如 00878 / QQQ" value={divForm.symbol} onChange={handleDivInput} name="symbol" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs uppercase font-mono font-bold" /></div>
+                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">配息總額（稅前）</label><input type="number" step="any" placeholder="0.00" value={divForm.amount} onChange={handleDivInput} name="amount" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div>
+                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">扣繳稅額</label><input type="number" step="any" placeholder="0" value={divForm.taxWithheld} onChange={handleDivInput} name="taxWithheld" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div>
+                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">實收淨額（自動計算）</label><input type="number" step="any" value={divForm.netAmount} readOnly className="w-full bg-slate-100 border border-slate-200 p-2 rounded-lg text-xs font-mono font-bold text-slate-700 cursor-not-allowed" /></div>
+                                <div className="sm:col-span-2 flex items-end">
+                                    <button type="submit" className="w-full bg-amber-500 text-white font-bold py-2.5 rounded-xl text-xs hover:bg-amber-600 shadow transition">儲存配息紀錄</button>
+                                </div>
+                            </form>
+
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-left text-sm">
+                                    <thead><tr className="text-slate-400 text-xs border-b"><th className="pb-2">日期</th><th className="pb-2">標的</th><th className="pb-2">市場</th><th className="pb-2">稅前金額</th><th className="pb-2">扣繳稅</th><th className="pb-2 text-amber-600">實收淨額</th><th className="pb-2">操作</th></tr></thead>
+                                    <tbody>
+                                        {dividends.length === 0 && <tr><td colSpan="7" className="py-8 text-center text-slate-400 text-xs">尚無配息紀錄</td></tr>}
+                                        {dividends.map(d => (
+                                            <tr key={d.id} className="border-b hover:bg-slate-50">
+                                                <td className="py-3 text-xs text-slate-400 font-mono">{d.date}</td>
+                                                <td className="py-3 font-bold">{d.symbol}</td>
+                                                <td className="text-xs">{d.market === 'US' ? '🇺🇸 美股' : '🇹🇼 台股'}</td>
+                                                <td className="py-3 font-mono text-slate-600">${Number(d.amount || 0).toFixed(2)}</td>
+                                                <td className="py-3 font-mono text-slate-400">-${Number(d.taxWithheld || 0).toFixed(2)}</td>
+                                                <td className="py-3 font-mono text-amber-600 font-bold">${Number(d.netAmount || 0).toFixed(2)}</td>
+                                                <td><button onClick={() => setDividends(dividends.filter(x => x.id !== d.id))} className="text-slate-300 hover:text-rose-500 transition">🗑️</button></td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Tab: 同步 (Google Drive) */}
+                    {activeTab === 'drive' && (
+                        <div className="space-y-4">
+                            <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm space-y-4">
+                                <h3 className="font-extrabold text-slate-800 text-sm">Google Drive 雲端同步</h3>
+                                {!gdriveToken ? (
+                                    <div className="space-y-3">
+                                        <div>
+                                            <label className="text-[11px] font-bold text-slate-500 block mb-1">Google OAuth Client ID</label>
+                                            <input type="text" placeholder="貼上您的 OAuth Client ID" value={gdriveClientId} onChange={e => setGdriveClientId(e.target.value)} className="w-full bg-slate-50 border border-slate-200 p-2.5 rounded-xl text-xs font-mono" />
+                                            <div className="text-[10px] text-slate-400 mt-1">在 Google Cloud Console → APIs &amp; Services → Credentials 取得</div>
+                                        </div>
+                                        <button onClick={handleGoogleSignIn} className="bg-white border-2 border-slate-200 hover:border-blue-300 hover:bg-blue-50 text-slate-700 font-bold px-5 py-2.5 rounded-xl text-sm transition flex items-center gap-2">
+                                            <span className="font-black text-blue-500">G</span> 使用 Google 帳戶登入
+                                        </button>
+                                    </div>
+                                ) : (
+                                    <div className="space-y-4">
+                                        <div className="flex items-center justify-between bg-emerald-50 border border-emerald-200 rounded-xl p-3">
+                                            <div>
+                                                <div className="text-xs font-bold text-emerald-700">已連線 Google Drive</div>
+                                                <div className="text-xs text-emerald-600 font-mono">{gdriveUser?.email || '已登入'}</div>
+                                            </div>
+                                            <button onClick={handleSignOut} className="text-xs text-slate-400 hover:text-rose-500 transition font-bold">登出</button>
+                                        </div>
+                                        <button onClick={handleSaveToCloud} disabled={isSyncing} className="w-full bg-slate-900 text-white font-bold py-2.5 rounded-xl text-xs hover:bg-slate-800 disabled:opacity-50 transition">
+                                            {isSyncing ? '處理中...' : '☁️ 備份到雲端'}
+                                        </button>
+                                        {cloudFiles.length > 0 && (
+                                            <div className="space-y-2">
+                                                <div className="text-[11px] font-bold text-slate-500">雲端備份檔案</div>
+                                                <select value={selectedFileId} onChange={e => setSelectedFileId(e.target.value)} className="w-full bg-slate-50 border border-slate-200 p-2 rounded-xl text-xs font-mono">
+                                                    {cloudFiles.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}
+                                                </select>
+                                                <button onClick={handleLoadFromCloud} disabled={isSyncing} className="w-full border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold py-2 rounded-xl text-xs disabled:opacity-50 transition">
+                                                    ⬇️ 從雲端還原
+                                                </button>
+                                            </div>
+                                        )}
+                                        {cloudFiles.length === 0 && (
+                                            <div className="text-xs text-slate-400 text-center py-4">尚無雲端備份，點上方按鈕建立第一份備份</div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+
+                            <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm space-y-3">
+                                <h3 className="font-extrabold text-slate-800 text-sm">本機資料管理</h3>
+                                <div className="text-xs text-slate-500">
+                                    交易紀錄：<span className="font-bold text-slate-800">{transactions.length} 筆</span>
+                                    　配息紀錄：<span className="font-bold text-slate-800">{dividends.length} 筆</span>
+                                </div>
+                                <button onClick={() => {
+                                    if (!confirm('確定清除全部本機資料？此操作無法還原。')) return;
+                                    setTransactions([]); setDividends([]);
+                                }} className="border border-rose-200 text-rose-500 hover:bg-rose-50 font-bold px-4 py-2 rounded-xl text-xs transition">
+                                    清除全部本機資料
+                                </button>
                             </div>
                         </div>
                     )}
@@ -315,7 +555,11 @@
         }
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
+        root.render(
+            <ErrorBoundary>
+                <App />
+            </ErrorBoundary>
+        );
     </script>
 </body>
 </html>
