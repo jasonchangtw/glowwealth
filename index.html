@@ -22,7 +22,7 @@
 
         const STOCK_NAMES = {
           '2330': '台積電', '2317': '鴻海', '2454': '聯發科', '0050': '元大台灣50', '0056': '元大高股息',
-          '00878': '國泰永續高股息', '00919': '群益台灣精選高息', 'AAPL': '蘋果', 'TSLA': '特斯拉', 'NVDA': '輝達', 'VOO': 'S&P 500 ETF'
+          '00878': '國泰永續高股息', '00919': '群益台灣精選高息', 'AAPL': '蘋果', 'TSLA': '特斯拉', 'NVDA': '輝達', 'VOO': 'S&P 500 ETF', 'QQQ': '納斯達克100'
         };
 
         const MONTHLY_TREND = [
@@ -40,7 +40,7 @@
             const [priceStatus, setPriceStatus] = useState('載入中');
             
             const [twDiscount, setTwDiscount] = useState(0.2); 
-            const [usBuyFeeConfig, setUsBuyFeeConfig] = useState(0.09); // ✨ 美股買進均一價預設 0.09
+            const [usBuyFeeConfig, setUsBuyFeeConfig] = useState(0.09); 
 
             const [transactions, setTransactions] = useState(() => JSON.parse(localStorage.getItem('gw_v14_txs') || '[]'));
             const [dividends, setDividends] = useState(() => JSON.parse(localStorage.getItem('gw_v14_divs') || '[]'));
@@ -51,7 +51,6 @@
             const [syncStatus, setSyncStatus] = useState('本機模式');
             const [isSyncing, setIsSyncing] = useState(false);
 
-            // 表單初始狀態 (加入 txRate 購買當日自訂匯率，台股預設為 1，美股連動當前匯率)
             const [txForm, setTxForm] = useState({ date: new Date().toISOString().split('T')[0], market: 'TW', symbol: '', type: 'BUY', price: '', shares: '', fee: '0', tax: '0', txRate: '1' });
             const [divForm, setDivForm] = useState({ date: new Date().toISOString().split('T')[0], market: 'TW', symbol: '', amount: '', taxWithheld: '0', netAmount: '' });
 
@@ -101,7 +100,7 @@
 
             useEffect(() => { fetchFinancialData(); }, [transactions]);
 
-            // ==================== 🛠️ 高級精算大腦：完美鎖定購買當日歷史匯率 ====================
+            // ==================== 🛠️ 核心精算大腦 ====================
             const portfolio = useMemo(() => {
                 const summary = {};
                 const sortedTx = [...transactions].sort((a, b) => new Date(a.date) - new Date(b.date));
@@ -125,12 +124,10 @@
                     if (type === 'BUY') {
                         summary[symbol].totalShares += s;
                         summary[symbol].totalBuyShares += s;
-                        // 買入總投入成本（台幣）：(成交總額 + 手續費) × 購買當天歷史匯率
-                        summary[symbol].totalBuyCostTwd += ((s * p) + f) * rate;
+                        summary[symbol].totalBuyCostTwd += ((s * p) + f) * (market === 'TW' ? 1 : rate);
                     } else if (type === 'SELL') {
                         const currentAvgCostTwd = summary[symbol].totalShares > 0 ? (summary[symbol].totalBuyCostTwd / summary[symbol].totalBuyShares) : 0;
-                        // 賣出實收淨額（台幣）= (成交總額 - 手續費 - 稅) × 當天歷史匯率
-                        const sellRevenueTwd = ((s * p) - f - t) * rate;
+                        const sellRevenueTwd = ((s * p) - f - t) * (market === 'TW' ? 1 : rate);
                         summary[symbol].realizedProfitTwd += sellRevenueTwd - (s * currentAvgCostTwd);
                         summary[symbol].totalShares -= s;
                     }
@@ -140,31 +137,23 @@
                     const livePrice = priceData[item.symbol] || (transactions.find(t => t.symbol === item.symbol)?.price || 0);
                     const currentShares = item.totalShares;
                     
-                    // 平均買入成本（台幣）
                     const avgBuyCostTwd = item.totalBuyShares > 0 ? (item.totalBuyCostTwd / item.totalBuyShares) : 0;
-                    
-                    // 當前投入成本（統一換算回台幣本金）
                     const currentInvestCostTwd = currentShares * avgBuyCostTwd;
                     
-                    // 當前市值（採用實時最新網撈匯率計算最新變現價值）
-                    const factor = item.market === 'TW' ? 1 : exchangeRate;
-                    const currentMarketValueTwd = currentShares * livePrice * factor;
-                    
-                    // 該檔累計股息
+                    const currentMarketValueTwd = currentShares * livePrice * (item.market === 'TW' ? 1 : exchangeRate);
                     const itemDivsTwd = dividends.filter(d => d.symbol === item.symbol).reduce((sum, d) => sum + parseFloat(d.netAmount || 0) * (d.market === 'TW' ? 1 : exchangeRate), 0);
                     
-                    // 總損益 = (當前實時市值 - 歷史台幣投入本金) + 歷史落袋已實現損益 + 累計股息
                     const totalProfitTwd = (currentMarketValueTwd - currentInvestCostTwd) + item.realizedProfitTwd + itemDivsTwd;
                     const roi = currentInvestCostTwd > 0 ? (totalProfitTwd / currentInvestCostTwd) * 100 : 0;
 
-                    // 為了在表格完美呈現，如果是美股，除以匯率轉換回美金給使用者看
+                    // ✨ 核心升級：精準保留原幣別小數點第二位，美股看美金，台股看台幣
                     return {
                         ...item, 
                         currentShares, 
                         avgBuyCost: item.market === 'TW' ? avgBuyCostTwd : (avgBuyCostTwd / (transactions.find(t => t.symbol === item.symbol)?.txRate || exchangeRate)),
                         currentPrice: livePrice,
-                        currentInvestCost: item.market === 'TW' ? currentInvestCostTwd : (currentInvestCostTwd / exchangeRate),
-                        currentMarketValue: item.market === 'TW' ? currentMarketValueTwd : (currentMarketValueTwd / exchangeRate),
+                        currentInvestCost: item.market === 'TW' ? currentInvestCostTwd : (currentInvestCostTwd / (transactions.find(t => t.symbol === item.symbol)?.txRate || exchangeRate)),
+                        currentMarketValue: item.market === 'TW' ? currentMarketValueTwd : (currentShares * livePrice), 
                         accumulatedDividend: item.market === 'TW' ? itemDivsTwd : (itemDivsTwd / exchangeRate),
                         totalProfit: item.market === 'TW' ? totalProfitTwd : (totalProfitTwd / exchangeRate), 
                         roi
@@ -176,11 +165,8 @@
                 let totalCostTwd = 0, totalValueTwd = 0, totalProfitTwd = 0;
                 let twValue = 0, usValue = 0;
 
-                // 直接利用精算完的台幣母數進行大盤加總
                 portfolio.forEach(p => {
-                    const factor = p.market === 'TW' ? 1 : exchangeRate;
-                    // 還原成台幣大總帳
-                    const costTwd = p.market === 'TW' ? p.currentInvestCost : p.currentInvestCost * exchangeRate;
+                    const costTwd = p.market === 'TW' ? p.currentInvestCost : p.currentInvestCost * (transactions.find(t => t.symbol === p.symbol)?.txRate || exchangeRate);
                     const valueTwd = p.market === 'TW' ? p.currentMarketValue : p.currentMarketValue * exchangeRate;
                     const profitTwd = p.market === 'TW' ? p.totalProfit : p.totalProfit * exchangeRate;
 
@@ -200,21 +186,17 @@
                 };
             }, [portfolio, dividends, exchangeRate, transactions]);
 
-            // ==================== 智能連動：表單輸入與富邦美股均一價自動填寫 ====================
             const handleTxFormChange = (e) => {
                 const { name, value } = e.target;
                 let updated = { ...txForm, [name]: value };
                 
-                // 切換市場時，手續費跟匯率輸入框要大改版
                 if (name === 'market') {
                     if (value === 'US') {
                         updated.txRate = exchangeRate.toString();
-                        updated.fee = usBuyFeeConfig.toString(); // ✨ 自動填入富邦複委託買進 0.09
+                        updated.fee = usBuyFeeConfig.toString(); 
                         updated.tax = '0';
                     } else {
-                        updated.txRate = '1';
-                        updated.fee = '0';
-                        updated.tax = '0';
+                        updated.txRate = '1'; updated.fee = '0'; updated.tax = '0';
                     }
                     updated.symbol = ''; updated.price = ''; updated.shares = '';
                 }
@@ -232,13 +214,11 @@
                         updated.fee = Math.max(20, Math.round(totalAmt * 0.001425 * twDiscount));
                         updated.tax = updated.type === 'SELL' ? Math.round(totalAmt * 0.003) : 0;
                     } else {
-                        // 美股：買進時帶入富邦複委託活動均一價 0.09 美元，賣出時依圖片規範帶入低消估算 15 美元
                         if (updated.type === 'BUY') {
-                            updated.fee = usBuyFeeConfig.toString();
-                            updated.tax = '0'; // 買進無美國證交稅
+                            updated.fee = usBuyFeeConfig.toString(); updated.tax = '0';
                         } else {
-                            updated.fee = '15'; // 賣出低消保障
-                            updated.tax = (Math.round(totalAmt * 0.0000278 * 100) / 100).toString(); // SEC 規費微量代扣
+                            updated.fee = '15';
+                            updated.tax = (Math.round(totalAmt * 0.0000278 * 100) / 100).toString();
                         }
                     }
                 }
@@ -312,6 +292,11 @@
                 } catch (e) { alert("載入雲端資料失敗"); } finally { setIsSyncing(false); }
             };
 
+            const userDisplayName = useMemo(() => {
+                if (!gdriveUser) return '';
+                return gdriveUser.name || gdriveUser.given_name || gdriveUser.displayName || '已連線';
+            }, [gdriveUser]);
+
             return (
                 <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-6">
                     {/* 頂部控制列 */}
@@ -321,8 +306,8 @@
                             <h1 className="text-3xl font-black text-slate-900 tracking-tight mt-1">家庭總覽</h1>
                         </div>
                         <div className="flex flex-wrap gap-2">
-                            <span className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all bg-slate-200/60 text-slate-600`}>
-                                {syncStatus} {gdriveUser && `(${gdriveUser.name})`}
+                            <span className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${syncStatus === '雲端模式' ? 'bg-emerald-50 text-emerald-600 border border-emerald-200' : 'bg-slate-200/60 text-slate-600'}`}>
+                                {syncStatus === '雲端模式' ? `雲端模式 (${userDisplayName})` : syncStatus}
                             </span>
                             <button onClick={fetchFinancialData} className="bg-white border border-slate-200 hover:bg-slate-50 px-3 py-1.5 rounded-xl text-xs font-bold shadow-sm text-slate-700 transition">🔄 刷新現價</button>
                             <button onClick={() => setActiveTab('ledger')} className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-1.5 rounded-xl text-xs font-bold shadow-md transition">＋ 新增紀錄</button>
@@ -365,7 +350,7 @@
                                 <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm col-span-2 md:col-span-1">
                                     <div className="text-[11px] font-bold text-slate-400 tracking-wider">本月 / 今年</div>
                                     <div className="text-xl md:text-2xl font-black text-rose-600 mt-2">+$489 / $789</div>
-                                    <div className="text-[10px] text-slate-400 mt-1">真實摩擦損益</div>
+                                    <div className="text-[10px] text-slate-400 mt-1">真實利潤加總</div>
                                 </div>
                             </div>
 
@@ -382,21 +367,22 @@
                                         <tbody className="divide-y divide-slate-100 font-medium">
                                             {portfolio.length === 0 ? (
                                                 <tr>
-                                                    <td className="p-3 font-bold font-mono">2330</td><td className="p-3">台積電</td><td className="p-3 font-mono">120</td><td className="p-3 font-mono">$711.13</td><td className="p-3 font-mono">$2,310.00</td><td className="p-3 font-mono">$85,335</td><td className="p-3 font-mono">$277,200</td><td className="p-3 font-mono text-amber-600">$3,014</td><td className="p-3 font-mono text-emerald-600">$0</td><td className="p-3 font-mono text-rose-600">+$3,014</td><td className="p-3 text-center"><span className="px-2 py-1 rounded font-bold text-rose-600 bg-rose-50">+224.84%</span></td>
+                                                    <td className="p-3 font-bold font-mono">2330</td><td className="p-3">台積電</td><td className="p-3 font-mono">120</td><td className="p-3 font-mono">$711.13</td><td className="p-3 font-mono">$2,310.00</td><td className="p-3 font-mono">$85,335.00</td><td className="p-3 font-mono">$277,200.00</td><td className="p-3 font-mono text-amber-600">$3,014.00</td><td className="p-3 font-mono text-emerald-600">$0.00</td><td className="p-3 font-mono text-rose-600">+$3,014.00</td><td className="p-3 text-center"><span className="px-2 py-1 rounded font-bold text-rose-600 bg-rose-50">+224.84%</span></td>
                                                 </tr>
                                             ) : (
                                                 portfolio.map(p => (
                                                     <tr key={p.symbol} className="hover:bg-slate-50 transition">
                                                         <td className="p-3 font-bold font-mono text-slate-900">{p.symbol}</td>
                                                         <td className="p-3 text-slate-600">{STOCK_NAMES[p.symbol] || p.name}</td>
-                                                        <td className="p-3 font-mono text-slate-800">{p.currentShares.toLocaleString()}</td>
+                                                        <td className="p-3 font-mono text-slate-800">{p.currentShares}</td>
                                                         <td className="p-3 font-mono text-slate-600">${p.avgBuyCost.toFixed(2)}</td>
-                                                        <td className="p-3 font-mono text-blue-600 font-bold">${p.currentPrice.toLocaleString()}</td>
-                                                        <td className="p-3 font-mono text-slate-700">${Math.round(p.currentInvestCost).toLocaleString()}</td>
-                                                        <td className="p-3 font-mono text-slate-900 font-semibold">${Math.round(p.currentMarketValue).toLocaleString()}</td>
-                                                        <td className="p-3 font-mono text-amber-600">${Math.round(p.accumulatedDividend).toLocaleString()}</td>
-                                                        <td className="p-3 font-mono text-emerald-600">${Math.round(p.realizedProfitTwd / (p.market === 'TW' ? 1 : exchangeRate)).toLocaleString()}</td>
-                                                        <td className={`p-3 font-mono font-bold ${p.totalProfit >= 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{p.totalProfit >= 0 ? '+' : ''}{Math.round(p.totalProfit).toLocaleString()}</td>
+                                                        <td className="p-3 font-mono text-blue-600 font-bold">${p.currentPrice.toFixed(2)}</td>
+                                                        {/* ✨ 已解鎖：全面點綴並保留小數點後兩位 .toFixed(2) ✨ */}
+                                                        <td className="p-3 font-mono text-slate-700">${p.currentInvestCost.toFixed(2)}</td>
+                                                        <td className="p-3 font-mono text-slate-900 font-semibold">${p.currentMarketValue.toFixed(2)}</td>
+                                                        <td className="p-3 font-mono text-amber-600">${p.accumulatedDividend.toFixed(2)}</td>
+                                                        <td className="p-3 font-mono text-emerald-600">${(p.realizedProfitTwd / (p.market === 'TW' ? 1 : exchangeRate)).toFixed(2)}</td>
+                                                        <td className={`p-3 font-mono font-bold ${p.totalProfit >= 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{p.totalProfit >= 0 ? '+' : ''}{p.totalProfit.toFixed(2)}</td>
                                                         <td className="p-3 text-center"><span className={`px-2 py-0.5 rounded font-bold ${p.totalProfit >= 0 ? 'text-rose-600 bg-rose-50' : 'text-emerald-600 bg-emerald-50'}`}>{p.totalProfit >= 0 ? '+' : ''}{p.roi.toFixed(2)}%</span></td>
                                                     </tr>
                                                 ))
@@ -456,7 +442,6 @@
                                 <div><label className="text-[11px] font-bold text-slate-500 block mb-1">種類</label><select value={txForm.type} onChange={handleTxFormChange} name="type" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs"><option value="BUY">買入</option><option value="SELL">賣出</option></select></div>
                                 <div><label className="text-[11px] font-bold text-slate-500 block mb-1">單價 / 股數</label><div className="flex gap-1"><input type="number" step="any" placeholder="單價" value={txForm.price} onChange={handleTxFormChange} name="price" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /><input type="number" placeholder="股數" value={txForm.shares} onChange={handleTxFormChange} name="shares" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div></div>
                                 
-                                {/* 顯示即時精算的手續費、稅金與關鍵的歷史自訂匯率輸入框 */}
                                 <div className="sm:col-span-3 grid grid-cols-1 sm:grid-cols-3 gap-3 bg-white/80 p-3 rounded-xl border border-slate-200/60 text-xs text-slate-500">
                                     <div>富邦手續費自動精算：<span className="font-mono font-bold text-slate-800">${txForm.fee}</span></div>
                                     <div>預估證交稅/規費：<span className="font-mono font-bold text-rose-500">${txForm.tax}</span></div>
@@ -500,6 +485,7 @@
                         </div>
                     )}
 
+                    {/* Tab 4: 同步 */}
                     {activeTab === 'drive' && (
                         <div className="max-w-md mx-auto bg-white border border-slate-100 rounded-2xl p-6 shadow-sm space-y-5">
                             <h3 className="font-extrabold text-slate-800 text-sm">Google Drive 雲端雙向同步</h3>
