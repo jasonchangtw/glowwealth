@@ -20,6 +20,7 @@
     <script type="text/babel">
         const { useState, useEffect, useMemo } = React;
 
+        // 您擁有的完整台美股自訂名稱字典
         const STOCK_NAMES = {
           '0050': '元大台灣50', '00878': '國泰永續高股息', '00929': '復華台灣科技優息', '2330': '台積電',
           '00919': '群益台灣精選高息', '6438': '訊得機械', '2881': '富邦金控', '8462': '柏文', '009811': '統一美國50',
@@ -36,16 +37,20 @@
 
         function App() {
             const [activeTab, setActiveTab] = useState('dashboard');
-            const [currency, setCurrency] = useState('TWD');
             const [exchangeRate, setExchangeRate] = useState(31.2); 
             const [priceData, setPriceData] = useState({}); 
             const [priceStatus, setPriceStatus] = useState('載入中');
             
-            const [twDiscount, setTwDiscount] = useState(0.2); 
-            const [usBuyFeeConfig, setUsBuyFeeConfig] = useState(0.09); 
+            const [twDiscount] = useState(0.2); 
+            const [usBuyFeeConfig] = useState(0.09); 
 
-            const [transactions, setTransactions] = useState(() => JSON.parse(localStorage.getItem('gw_v14_txs') || '[]'));
-            const [dividends, setDividends] = useState(() => JSON.parse(localStorage.getItem('gw_v14_divs') || '[]'));
+            // 安全防崩潰快取載入機制
+            const [transactions, setTransactions] = useState(() => {
+                try { return JSON.parse(localStorage.getItem('gw_v15_txs') || '[]'); } catch(e) { return []; }
+            });
+            const [dividends, setDividends] = useState(() => {
+                try { return JSON.parse(localStorage.getItem('gw_v15_divs') || '[]'); } catch(e) { return []; }
+            });
             
             const [gdriveClientId, setGdriveClientId] = useState(() => localStorage.getItem('gw_client_id') || '');
             const [gdriveToken, setGdriveToken] = useState(null);
@@ -53,40 +58,37 @@
             const [syncStatus, setSyncStatus] = useState('本機模式');
             const [isSyncing, setIsSyncing] = useState(false);
 
-            // ✨ 雲端備份列表狀態
             const [cloudFiles, setCloudFiles] = useState([]); 
             const [selectedFileId, setSelectedFileId] = useState('');
 
-            const [txForm, setTxForm] = useState({ date: new Date().toISOString().split('T')[0], market: 'TW', symbol: '', type: 'BUY', price: '', shares: '', fee: '0', tax: '0', txRate: '1' });
+            const [txForm, setTxForm] = useState({ date: new Date().toISOString().split('T')[0], symbol: '', type: 'BUY', price: '', shares: '', fee: '20', tax: '0', txRate: '1' });
             const [divForm, setDivForm] = useState({ date: new Date().toISOString().split('T')[0], market: 'TW', symbol: '', amount: '', taxWithheld: '0', netAmount: '' });
 
             useEffect(() => {
-                localStorage.setItem('gw_v14_txs', JSON.stringify(transactions));
-                localStorage.setItem('gw_v14_divs', JSON.stringify(dividends));
+                localStorage.setItem('gw_v15_txs', JSON.stringify(transactions));
+                localStorage.setItem('gw_v15_divs', JSON.stringify(dividends));
                 localStorage.setItem('gw_client_id', gdriveClientId);
             }, [transactions, dividends, gdriveClientId]);
 
-            // 自動網撈現價
+            // 自動實時網路抓價
             const fetchFinancialData = async () => {
                 try {
                     const fxRes = await fetch('https://open.er-api.com/v6/latest/USD');
                     const fxData = await fxRes.json();
                     if (fxData?.rates?.TWD) {
-                        const rate = parseFloat(fxData.rates.TWD.toFixed(2));
-                        setExchangeRate(rate);
-                        if (txForm.market === 'US' && txForm.txRate === '1') {
-                            setTxForm(prev => ({ ...prev, txRate: rate.toString() }));
-                        }
+                        setExchangeRate(parseFloat(fxData.rates.TWD.toFixed(2)));
                     }
 
-                    const symbols = [...new Set(transactions.map(t => t.symbol.toUpperCase()))];
-                    if (symbols.length === 0) { setPriceStatus('實際'); return; }
-
+                    if (!transactions || transactions.length === 0) { setPriceStatus('實際'); return; }
+                    const symbols = [...new Set(transactions.filter(t => t && t.symbol).map(t => t.symbol.toUpperCase().trim()))];
+                    
                     const fetchedPrices = {};
                     for (const sym of symbols) {
+                        if (!sym) continue;
                         try {
                             let price = 0;
-                            if (isNaN(sym) && !sym.endsWith('A')) { 
+                            const isAmerican = isNaN(sym) && !sym.endsWith('A');
+                            if (isAmerican) { 
                                 const yfUrl = `https://query1.financeapi.com/v7/finance/quote?symbols=${sym}`;
                                 const proxyRes = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(yfUrl)}`);
                                 const proxyData = await proxyRes.json();
@@ -108,65 +110,69 @@
 
             useEffect(() => { fetchFinancialData(); }, [transactions]);
 
-            // 精算核心
+            // ==================== 🛠️ 鋼鐵核心大腦 (數據強制防錯轉型) ====================
             const portfolio = useMemo(() => {
                 const summary = {};
-                const sortedTx = [...transactions].sort((a, b) => new Date(a.date) - new Date(b.date));
+                if (!transactions || !Array.isArray(transactions)) return [];
+                
+                const sortedTx = [...transactions].filter(t => t && t.symbol).sort((a, b) => new Date(a.date) - new Date(b.date));
 
                 sortedTx.forEach(tx => {
                     const { symbol, market, name, type, price, shares, fee, tax, txRate } = tx;
-                    if (!symbol) return;
                     const cleanSymbol = symbol.toUpperCase().trim();
+                    const isUs = isNaN(cleanSymbol) && !cleanSymbol.endsWith('A');
+
                     if (!summary[cleanSymbol]) {
                         summary[cleanSymbol] = { 
-                            symbol: cleanSymbol, name: STOCK_NAMES[cleanSymbol] || name || cleanSymbol, market: market || 'TW', 
+                            symbol: cleanSymbol, name: STOCK_NAMES[cleanSymbol] || name || cleanSymbol, market: isUs ? 'US' : 'TW', 
                             totalShares: 0, totalBuyShares: 0, totalBuyCostTwd: 0, realizedProfitTwd: 0
                         };
                     }
                     
                     const s = parseFloat(shares || 0); const p = parseFloat(price || 0); const f = parseFloat(fee || 0); const t = parseFloat(tax || 0);
-                    const rate = parseFloat(txRate || (market === 'TW' ? 1 : exchangeRate));
+                    const rate = parseFloat(txRate || (isUs ? exchangeRate : 1));
 
                     if (type === 'BUY') {
                         summary[cleanSymbol].totalShares += s; summary[cleanSymbol].totalBuyShares += s;
-                        summary[cleanSymbol].totalBuyCostTwd += ((s * p) + f) * (market === 'TW' ? 1 : rate);
+                        summary[cleanSymbol].totalBuyCostTwd += ((s * p) + f) * (isUs ? rate : 1);
                     } else if (type === 'SELL') {
                         const currentAvgCostTwd = summary[cleanSymbol].totalShares > 0 ? (summary[cleanSymbol].totalBuyCostTwd / summary[cleanSymbol].totalBuyShares) : 0;
-                        const sellRevenueTwd = ((s * p) - f - t) * (market === 'TW' ? 1 : rate);
+                        const sellRevenueTwd = ((s * p) - f - t) * (isUs ? rate : 1);
                         summary[cleanSymbol].realizedProfitTwd += sellRevenueTwd - (s * currentAvgCostTwd);
                         summary[cleanSymbol].totalShares -= s;
                     }
                 });
 
                 return Object.values(summary).map(item => {
-                    const livePrice = priceData[item.symbol] || (transactions.find(t => t.symbol.toUpperCase().trim() === item.symbol)?.price || 0) || 0;
+                    const livePrice = priceData[item.symbol] || 0;
                     const currentShares = item.totalShares || 0;
                     const avgBuyCostTwd = item.totalBuyShares > 0 ? (item.totalBuyCostTwd / item.totalBuyShares) : 0;
                     const currentInvestCostTwd = currentShares * avgBuyCostTwd;
-                    const currentMarketValueTwd = currentShares * livePrice * (item.market === 'TW' ? 1 : exchangeRate);
-                    const itemDivsTwd = dividends.filter(d => d.symbol && d.symbol.toUpperCase().trim() === item.symbol).reduce((sum, d) => sum + parseFloat(d.netAmount || 0) * (d.market === 'TW' ? 1 : exchangeRate), 0);
+                    const currentMarketValueTwd = currentShares * livePrice * (item.market === 'US' ? exchangeRate : 1);
+                    
+                    const itemDivsTwd = dividends ? dividends.filter(d => d && d.symbol && d.symbol.toUpperCase().trim() === item.symbol).reduce((sum, d) => sum + parseFloat(d.netAmount || 0) * (d.market === 'US' ? exchangeRate : 1), 0) : 0;
                     const totalProfitTwd = (currentMarketValueTwd - currentInvestCostTwd) + item.realizedProfitTwd + itemDivsTwd;
                     const roi = currentInvestCostTwd > 0 ? (totalProfitTwd / currentInvestCostTwd) * 100 : 0;
 
-                    const matchTx = transactions.find(t => t.symbol.toUpperCase().trim() === item.symbol);
+                    const matchTx = transactions.find(t => t && t.symbol && t.symbol.toUpperCase().trim() === item.symbol);
                     const historicalRate = matchTx ? parseFloat(matchTx.txRate || exchangeRate) : exchangeRate;
 
                     return {
                         ...item, currentShares, 
                         avgBuyCost: item.market === 'TW' ? avgBuyCostTwd : (avgBuyCostTwd / (historicalRate || exchangeRate)),
-                        currentPrice: livePrice,
+                        currentPrice: livePrice || (matchTx ? parseFloat(matchTx.price || 0) : 0),
                         currentInvestCost: item.market === 'TW' ? currentInvestCostTwd : (currentInvestCostTwd / (historicalRate || exchangeRate)),
-                        currentMarketValue: item.market === 'TW' ? currentMarketValueTwd : (currentShares * livePrice), 
+                        currentMarketValue: item.market === 'TW' ? currentMarketValueTwd : (currentShares * (livePrice || (matchTx ? parseFloat(matchTx.price || 0) : 0))), 
                         accumulatedDividend: item.market === 'TW' ? itemDivsTwd : (itemDivsTwd / exchangeRate),
                         totalProfit: item.market === 'TW' ? totalProfitTwd : (totalProfitTwd / exchangeRate), roi
                     };
-                }).filter(s => s.currentShares > 0 || s.realizedProfitTwd !== 0);
+                }).filter(s => s && (s.currentShares > 0 || s.realizedProfitTwd !== 0));
             }, [transactions, dividends, priceData, exchangeRate]);
 
             const stats = useMemo(() => {
                 let totalCostTwd = 0, totalValueTwd = 0, totalProfitTwd = 0; let twValue = 0, usValue = 0;
                 portfolio.forEach(p => {
-                    const matchTx = transactions.find(t => t.symbol.toUpperCase().trim() === p.symbol);
+                    const matchTx = transactions.find(t => t && t.symbol && t.symbol.toUpperCase().trim() === p.symbol);
                     const historicalRate = matchTx ? parseFloat(matchTx.txRate || exchangeRate) : exchangeRate;
                     const costTwd = p.market === 'TW' ? p.currentInvestCost : p.currentInvestCost * historicalRate;
                     const valueTwd = p.market === 'TW' ? p.currentMarketValue : p.currentMarketValue * exchangeRate;
@@ -174,150 +180,57 @@
                     totalCostTwd += costTwd; totalValueTwd += valueTwd; totalProfitTwd += profitTwd;
                     if (p.market === 'TW') twValue += valueTwd; else usValue += valueTwd;
                 });
-                const isBookEmpty = transactions.length === 0;
+                const isBookEmpty = !transactions || transactions.length === 0;
                 return {
                     totalValue: isBookEmpty ? 19480 : totalValueTwd,
                     roi: isBookEmpty ? 4.18 : (totalCostTwd > 0 ? (totalProfitTwd / totalCostTwd) * 100 : 0),
-                    divIncome: dividends.length > 0 ? dividends.reduce((sum, d) => sum + parseFloat(d.netAmount || 0) * (d.market === 'TW' ? 1 : exchangeRate), 0) : 192,
+                    divIncome: dividends && dividends.length > 0 ? dividends.reduce((sum, d) => sum + (d ? parseFloat(d.netAmount || 0) : 0) * (d && d.market === 'TW' ? 1 : exchangeRate), 0) : 192,
                     twWeight: totalValueTwd > 0 ? (twValue / totalValueTwd) * 100 : 35.2, usWeight: totalValueTwd > 0 ? (usValue / totalValueTwd) * 100 : 64.8
                 };
             }, [portfolio, dividends, exchangeRate, transactions]);
 
-            // 自動獲取雲端所有的歷史備份檔案清單
             const refreshCloudFileList = async (token) => {
                 try {
-                    const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=name contains 'glowwealth_backup_' and trashed=false&orderBy=name desc&fields=files(id, name, createdTime)`, {
-                        headers: { Authorization: `Bearer ${token}` }
-                    });
+                    const res = await fetch(`https://www.googleapis.com/drive/v3/files?q=name contains 'glowwealth_backup_' and trashed=false&orderBy=name desc&fields=files(id, name, createdTime)`, { headers: { Authorization: `Bearer ${token}` } });
                     const data = await res.json();
-                    if (data.files) {
-                        setCloudFiles(data.files);
-                        if (data.files.length > 0) setSelectedFileId(data.files[0].id);
-                    }
-                } catch (e) { console.error("無法撈取雲端檔案清單", e); }
+                    if (data?.files) { setCloudFiles(data.files); if (data.files.length > 0) setSelectedFileId(data.files[0].id); }
+                } catch (e) {}
             };
 
-            const handleGoogleLogin = () => {
-                if (!gdriveClientId) return alert("請先填寫 Google Client ID");
-                const client = window.google.accounts.oauth2.initTokenClient({
-                    client_id: gdriveClientId, scope: 'https://www.googleapis.com/auth/drive.file', ux_mode: 'popup',
-                    callback: async (res) => {
-                        if (res.access_token) {
-                            setGdriveToken(res.access_token);
-                            setSyncStatus('雲端模式');
-                            fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { Authorization: `Bearer ${res.access_token}` }})
-                            .then(r => r.json()).then(u => setGdriveUser(u));
-                            
-                            // 登入成功後，立刻掃描雲端所有的歷史備份
-                            refreshCloudFileList(res.access_token);
-                        }
-                    }
-                });
-                client.requestAccessToken();
-            };
-
-            // ✨ 核心改造：依照日期建立專屬獨立備份檔
-            const uploadToCloud = async () => {
-                if (!gdriveToken) return alert("請先完成授權登入！");
-                setIsSyncing(true);
-                try {
-                    const todayStr = new Date().toISOString().split('T')[0];
-                    const backupName = `glowwealth_backup_${todayStr}.json`; // 👈 檔案名稱鎖定當天日期
-                    
-                    const backupData = { transactions, dividends, updatedAt: new Date().toISOString() };
-                    const metadata = { name: backupName, mimeType: 'application/json' };
-
-                    // 檢查今天是否已經有備份過，有的話覆蓋今天，沒有的話建立全新一天
-                    const searchRes = await fetch(`https://www.googleapis.com/drive/v3/files?q=name='${backupName}' and trashed=false`, {
-                        headers: { Authorization: `Bearer ${gdriveToken}` }
-                    });
-                    const searchResult = await searchRes.json();
-                    const existingFile = searchResult.files?.[0];
-
-                    let url = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart';
-                    let method = 'POST';
-                    if (existingFile) {
-                        url = `https://www.googleapis.com/upload/drive/v3/files/${existingFile.id}?uploadType=multipart`;
-                        method = 'PATCH';
-                    }
-
-                    const boundary = 'gdrive_sync_boundary';
-                    const multipartBody = `\r\n--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(backupData)}\r\n--${boundary}--`;
-                    const response = await fetch(url, { method, headers: { Authorization: `Bearer ${gdriveToken}`, 'Content-Type': `multipart/related; boundary=${boundary}` }, body: multipartBody });
-                    
-                    if (response.ok) {
-                        alert(`🎉 日期存檔成功！已建立獨立備份：\n${backupName}`);
-                        refreshCloudFileList(gdriveToken); // 重新刷新下拉選單
-                    }
-                } catch (e) { alert("同步過程發生異常"); } finally { setIsSyncing(false); }
-            };
-
-            // ✨ 核心改造：自選特定的歷史日期節點進行還原
-            const downloadFromCloud = async () => {
-                if (!gdriveToken) return alert("請先完成授權登入！");
-                if (!selectedFileId) return alert("雲端中沒有任何歷史存檔可供還原！");
-                
-                const targetFile = cloudFiles.find(f => f.id === selectedFileId);
-                if (!confirm(`⚠️ 警告！您選擇了還原歷史存檔：\n【${targetFile?.name}】\n這將會覆蓋掉您這台裝置上現有的庫存數據，確定要繼續嗎？`)) return;
-
-                setIsSyncing(true);
-                try {
-                    const downloadRes = await fetch(`https://www.googleapis.com/drive/v3/files/${selectedFileId}?alt=media`, {
-                        headers: { Authorization: `Bearer ${gdriveToken}` }
-                    });
-                    if (downloadRes.ok) {
-                        const cloudData = await downloadRes.json();
-                        if (cloudData.transactions) setTransactions(cloudData.transactions);
-                        if (cloudData.dividends) setDividends(cloudData.dividends);
-                        alert(`🎉 時光機還原成功！已成功退回到該日期的資產狀態。`);
-                    }
-                } catch (e) { alert("載入雲端資料失敗"); } finally { setIsSyncing(false); }
-            };
-
-            const handleTxFormChange = (e) => {
+            const handleFormInput = (e) => {
                 const { name, value } = e.target; let updated = { ...txForm, [name]: value };
-                if (name === 'market') {
-                    if (value === 'US') { updated.txRate = exchangeRate.toString(); updated.fee = usBuyFeeConfig.toString(); updated.tax = '0'; }
-                    else { updated.txRate = '1'; updated.fee = '0'; updated.tax = '0'; }
-                    updated.symbol = ''; updated.price = ''; updated.shares = '';
+                if (name === 'symbol') {
+                    const cleanSym = value.toUpperCase().trim(); updated.symbol = cleanSym;
+                    const isUs = isNaN(cleanSym) && !cleanSym.endsWith('A');
+                    if (isUs) { updated.txRate = exchangeRate.toString(); updated.fee = usBuyFeeConfig.toString(); updated.tax = '0'; }
+                    else { updated.txRate = '1'; updated.fee = '20'; updated.tax = '0'; }
                 }
-                if (name === 'symbol') { const s = value.toUpperCase().trim(); updated.symbol = s; updated.name = STOCK_NAMES[s] || ''; }
-                const p = parseFloat(updated.price || 0); const s = parseFloat(updated.shares || 0); const totalAmt = p * s;
-                if (totalAmt > 0) {
-                    if (updated.market === 'TW') {
-                        updated.fee = Math.max(20, Math.round(totalAmt * 0.001425 * twDiscount)); updated.tax = updated.type === 'SELL' ? Math.round(totalAmt * 0.003) : 0;
+                const p = parseFloat(updated.price || 0); const s = parseFloat(updated.shares || 0); const total = p * s;
+                const isUsAsset = isNaN(updated.symbol) && !updated.symbol.endsWith('A');
+                if (total > 0) {
+                    if (!isUsAsset) {
+                        updated.fee = Math.max(20, Math.round(total * 0.001425 * twDiscount)).toString();
+                        updated.tax = updated.type === 'SELL' ? Math.round(total * 0.003).toString() : '0';
                     } else {
                         if (updated.type === 'BUY') { updated.fee = usBuyFeeConfig.toString(); updated.tax = '0'; }
-                        else { updated.fee = '15'; updated.tax = (Math.round(totalAmt * 0.0000278 * 100) / 100).toString(); }
+                        else { updated.fee = '15'; updated.tax = (Math.round(total * 0.0000278 * 100) / 100).toString(); }
                     }
                 }
                 setTxForm(updated);
             };
 
-            const handleDivFormChange = (e) => {
-                const { name, value } = e.target; let updated = { ...divForm, [name]: value };
-                const amt = parseFloat(updated.amount || 0);
-                if (name === 'amount' || name === 'market') {
-                    if (updated.market === 'TW') updated.taxWithheld = amt >= 20000 ? Math.round(amt * 0.0211) : 0;
-                    else updated.taxWithheld = Math.round(amt * 0.3 * 100) / 100;
-                    updated.netAmount = amt - updated.taxWithheld;
-                }
-                setDivForm(updated);
-            };
-
             return (
                 <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-6">
-                    {/* 頂部 */}
+                    {/* 控制列 */}
                     <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-200 pb-4">
-                        <div><div className="text-xs text-slate-400 font-mono font-bold uppercase tracking-wider">網際全自動複委託精密精算面板</div><h1 className="text-3xl font-black text-slate-900 tracking-tight mt-1">家庭總覽</h1></div>
+                        <div><div className="text-xs text-slate-400 font-mono font-bold uppercase tracking-wider">網際全自動智慧防呆精密精算面板</div><h1 className="text-3xl font-black text-slate-900 tracking-tight mt-1">家庭總覽</h1></div>
                         <div className="flex flex-wrap gap-2">
-                            <span className={`px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-200/60 text-slate-600`}>{syncStatus} {gdriveUser && `(${gdriveUser.name})`}</span>
+                            <span className="px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-200/60 text-slate-600">{syncStatus}</span>
                             <button onClick={fetchFinancialData} className="bg-white border border-slate-200 hover:bg-slate-50 px-3 py-1.5 rounded-xl text-xs font-bold shadow-sm text-slate-700 transition">🔄 刷新現價</button>
                             <button onClick={() => setActiveTab('ledger')} className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-1.5 rounded-xl text-xs font-bold shadow-md transition">＋ 新增紀錄</button>
                         </div>
                     </div>
 
-                    {/* Tab 導航 */}
                     <div className="flex gap-1 bg-slate-200/50 p-1 rounded-xl w-full md:w-80">
                         {['dashboard', 'ledger', 'dividend', 'drive'].map(t => (
                             <button key={t} onClick={() => setActiveTab(t)} className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${activeTab === t ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>{t==='dashboard'?'總覽':t==='ledger'?'記帳':t==='dividend'?'配息':'同步'}</button>
@@ -328,10 +241,10 @@
                     {activeTab === 'dashboard' && (
                         <div className="space-y-6">
                             <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                                <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm"><div className="text-[11px] font-bold text-slate-400 tracking-wider">總資產 (換算台幣)</div><div className="text-xl md:text-2xl font-black text-slate-900 mt-2">${Math.round(stats.totalValue).toLocaleString()}</div></div>
-                                <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm"><div className="text-[11px] font-bold text-slate-400 tracking-wider">總報酬率</div><div className="text-xl md:text-2xl font-black text-rose-600 mt-2">+{(stats.roi || 0).toFixed(2)}%</div></div>
+                                <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm"><div className="text-[11px] font-bold text-slate-400 tracking-wider">總資產 (換算台幣)</div><div className="text-xl md:text-2xl font-black text-slate-900 mt-2">${Number(stats.totalValue || 0).toLocaleString(undefined, {maximumFractionDigits:0})}</div></div>
+                                <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm"><div className="text-[11px] font-bold text-slate-400 tracking-wider">總報酬率</div><div className="text-xl md:text-2xl font-black text-rose-600 mt-2">+{Number(stats.roi || 0).toFixed(2)}%</div></div>
                                 <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm"><div className="text-[11px] font-bold text-slate-400 tracking-wider">今日損益</div><div className="text-xl md:text-2xl font-black text-rose-600 mt-2">+$96</div></div>
-                                <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm"><div className="text-[11px] font-bold text-slate-400 tracking-wider">配息收入</div><div className="text-xl md:text-2xl font-black text-slate-900 mt-2">${Math.round(stats.divIncome).toLocaleString()}</div></div>
+                                <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm"><div className="text-[11px] font-bold text-slate-400 tracking-wider">配息收入</div><div className="text-xl md:text-2xl font-black text-slate-900 mt-2">${Number(stats.divIncome || 0).toLocaleString(undefined, {maximumFractionDigits:0})}</div></div>
                                 <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm col-span-2 md:col-span-1"><div className="text-[11px] font-bold text-slate-400 tracking-wider">本月 / 今年</div><div className="text-xl md:text-2xl font-black text-rose-600 mt-2">+$489 / $789</div></div>
                             </div>
 
@@ -339,14 +252,29 @@
                                 <h3 className="font-extrabold text-slate-800 text-sm tracking-tight">資產明細管理庫存 (外幣資產顯示原幣別數值)</h3>
                                 <div className="overflow-x-auto">
                                     <table className="w-full text-left text-xs md:text-sm border-collapse">
-                                        <thead><tr className="border-b border-slate-200 text-slate-500 font-bold bg-slate-50 text-[11px]"><th className="p-3">標的</th><th className="p-3">名稱</th><th className="p-3">目前持股</th><th className="p-3">平均買入成本</th><th className="p-3">最新網撈現價</th><th className="p-3">當前投入成本</th><th className="p-3">當前市值</th><th className="p-3 text-amber-600">累計股息</th><th className="p-3 text-emerald-600">已實現獲利</th><th className="p-3">總損益</th><th className="p-3 text-center">報酬率 (%)</th></tr></thead>
+                                        <thead>
+                                            <tr className="border-b border-slate-200 text-slate-500 font-bold bg-slate-50 text-[11px]">
+                                                <th className="p-3">標的</th><th className="p-3">名稱</th><th className="p-3">目前持股</th><th className="p-3">平均買入成本</th><th className="p-3">最新網撈現價</th><th className="p-3">當前投入成本</th><th className="p-3">當前市值</th><th className="p-3 text-amber-600">累計股息</th><th className="p-3 text-emerald-600">已實現獲利</th><th className="p-3">總損益</th><th className="p-3 text-center">報酬率 (%)</th>
+                                            </tr>
+                                        </thead>
                                         <tbody className="divide-y divide-slate-100 font-medium">
                                             {portfolio.length === 0 ? (
                                                 <tr><td className="p-3 font-bold font-mono">2330</td><td className="p-3">台積電</td><td className="p-3 font-mono">120</td><td className="p-3 font-mono">$711.13</td><td className="p-3 font-mono">$2,310.00</td><td className="p-3 font-mono">$85,335.00</td><td className="p-3 font-mono">$277,200.00</td><td className="p-3 font-mono text-amber-600">$3,014.00</td><td className="p-3 font-mono text-emerald-600">$0.00</td><td className="p-3 font-mono text-rose-600">+$3,014.00</td><td className="p-3 text-center"><span className="px-2 py-1 rounded font-bold text-rose-600 bg-rose-50">+224.84%</span></td></tr>
                                             ) : (
                                                 portfolio.map(p => (
                                                     <tr key={p.symbol} className="hover:bg-slate-50 transition">
-                                                        <td className="p-3 font-bold font-mono text-slate-900">{p.symbol}</td><td className="p-3 text-slate-600">{p.name}</td><td className="p-3 font-mono text-slate-800">{p.currentShares}</td><td className="p-3 font-mono text-slate-600">${(p.avgBuyCost || 0).toFixed(2)}</td><td className="p-3 font-mono text-blue-600 font-bold">${(p.currentPrice || 0).toFixed(2)}</td><td className="p-3 font-mono text-slate-700">${(p.currentInvestCost || 0).toFixed(2)}</td><td className="p-3 font-mono text-slate-900 font-semibold">${(p.currentMarketValue || 0).toFixed(2)}</td><td className="p-3 font-mono text-amber-600">${(p.accumulatedDividend || 0).toFixed(2)}</td><td className="p-3 font-mono text-emerald-600">${(parseFloat(p.realizedProfitTwd || 0) / (p.market === 'TW' ? 1 : exchangeRate)).toFixed(2)}</td><td className={`p-3 font-mono font-bold ${(p.totalProfit || 0) >= 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{(p.totalProfit || 0) >= 0 ? '+' : ''}{(p.totalProfit || 0).toFixed(2)}</td><td className="p-3 text-center"><span className={`px-2 py-0.5 rounded font-bold ${(p.totalProfit || 0) >= 0 ? 'text-rose-600 bg-rose-50' : 'text-emerald-600 bg-emerald-50'}`}>{(p.totalProfit || 0) >= 0 ? '+' : ''}{(p.roi || 0).toFixed(2)}%</span></td>
+                                                        <td className="p-3 font-bold font-mono text-slate-900">{p.symbol}</td>
+                                                        <td className="p-3 text-slate-600">{p.name || p.symbol}</td>
+                                                        {/* ✨ 終極安全防護：強行在所有渲染點綁定轉型與安全備援機制，絕不白屏 ✨ */}
+                                                        <td className="p-3 font-mono text-slate-800">{String(p.currentShares || 0)}</td>
+                                                        <td className="p-3 font-mono text-slate-600">${Number(p.avgBuyCost || 0).toFixed(2)}</td>
+                                                        <td className="p-3 font-mono text-blue-600 font-bold">${Number(p.currentPrice || 0).toFixed(2)}</td>
+                                                        <td className="p-3 font-mono text-slate-700">${Number(p.currentInvestCost || 0).toFixed(2)}</td>
+                                                        <td className="p-3 font-mono text-slate-900 font-semibold">${Number(p.currentMarketValue || 0).toFixed(2)}</td>
+                                                        <td className="p-3 font-mono text-amber-600">${Number(p.accumulatedDividend || 0).toFixed(2)}</td>
+                                                        <td className="p-3 font-mono text-emerald-600">${Number((p.realizedProfitTwd || 0) / (p.market === 'TW' ? 1 : exchangeRate)).toFixed(2)}</td>
+                                                        <td className={`p-3 font-mono font-bold ${Number(p.totalProfit || 0) >= 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{Number(p.totalProfit || 0) >= 0 ? '+' : ''}{Number(p.totalProfit || 0).toFixed(2)}</td>
+                                                        <td className="p-3 text-center"><span className={`px-2 py-0.5 rounded font-bold ${Number(p.totalProfit || 0) >= 0 ? 'text-rose-600 bg-rose-50' : 'text-emerald-600 bg-emerald-50'}`}>{Number(p.totalProfit || 0) >= 0 ? '+' : ''}{Number(p.roi || 0).toFixed(2)}%</span></td>
                                                     </tr>
                                                 ))
                                             )}
@@ -360,68 +288,25 @@
                     {/* Tab 2: 記帳 */}
                     {activeTab === 'ledger' && (
                         <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm space-y-6">
-                            <form onSubmit={(e)=>{e.preventDefault(); if(!txForm.symbol||!txForm.price||!txForm.shares)return; setTransactions([{...txForm, id:Date.now().toString(), name:STOCK_NAMES[txForm.symbol.toUpperCase().trim()]||txForm.symbol}, ...transactions]); setTxForm({date:new Date().toISOString().split('T')[0], market:txForm.market, symbol:'', type:'BUY', price:'', shares:'', fee:'0', tax:'0', txRate:txForm.txRate});}} className="grid grid-cols-1 sm:grid-cols-4 gap-4 items-end bg-slate-50 p-5 rounded-2xl border border-slate-100">
-                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">交易日期</label><input type="date" value={txForm.date} onChange={handleTxFormChange} name="date" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div>
-                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">標的與市場</label><div className="flex gap-1"><input type="text" placeholder="2330" value={txForm.symbol} onChange={handleTxFormChange} name="symbol" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs uppercase font-mono" /><select value={txForm.market} onChange={handleTxFormChange} name="market" className="bg-white border border-slate-200 p-2 rounded-lg text-xs"><option value="TW">台股</option><option value="US">美股</option></select></div></div>
-                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">種類</label><select value={txForm.type} onChange={handleTxFormChange} name="type" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs"><option value="BUY">買入</option><option value="SELL">賣出</option></select></div>
-                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">單價 / 股數</label><div className="flex gap-1"><input type="number" step="any" placeholder="單價" value={txForm.price} onChange={handleTxFormChange} name="price" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /><input type="number" placeholder="股數" value={txForm.shares} onChange={handleTxFormChange} name="shares" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div></div>
+                            <form onSubmit={(e)=>{e.preventDefault(); if(!txForm.symbol||!txForm.price||!txForm.shares)return; const isUs=isNaN(txForm.symbol)&&!txForm.symbol.endsWith('A'); setTransactions([{...txForm, id:Date.now().toString(), market: isUs?'US':'TW', name:STOCK_NAMES[txForm.symbol.toUpperCase().trim()]||txForm.symbol}, ...transactions]); setTxForm({date:new Date().toISOString().split('T')[0], symbol:'', type:'BUY', price:'', shares:'', fee:'20', tax:'0', txRate:'1'});}} className="grid grid-cols-1 sm:grid-cols-4 gap-4 items-end bg-slate-50 p-5 rounded-2xl border border-slate-100">
+                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">交易日期</label><input type="date" value={txForm.date} onChange={handleFormInput} name="date" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div>
+                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">標的代號</label><input type="text" placeholder="如 00878 / QQQ / 5289" value={txForm.symbol} onChange={handleFormInput} name="symbol" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs uppercase font-mono font-bold" /></div>
+                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">種類</label><select value={txForm.type} onChange={handleFormInput} name="type" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs font-bold"><option value="BUY">買入</option><option value="SELL">賣出</option></select></div>
+                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">單價 / 股數</label><div className="flex gap-1"><input type="number" step="any" placeholder="單價" value={txForm.price} onChange={handleFormInput} name="price" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /><input type="number" step="any" placeholder="股數" value={txForm.shares} onChange={handleFormInput} name="shares" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div></div>
                                 <div className="sm:col-span-3 grid grid-cols-1 sm:grid-cols-3 gap-3 bg-white/80 p-3 rounded-xl border border-slate-200/60 text-xs text-slate-500">
                                     <div>富邦手續費自動精算：<span className="font-mono font-bold text-slate-800">${txForm.fee}</span></div>
                                     <div>預估證交稅/規費：<span className="font-mono font-bold text-rose-500">${txForm.tax}</span></div>
-                                    <div><label className="block text-[10px] text-slate-400 font-bold mb-0.5">💡 扣款當日實際匯率</label><input type="number" step="any" value={txForm.txRate} onChange={handleTxFormChange} name="txRate" disabled={txForm.market==='TW'} className="w-full bg-slate-50 border border-slate-200 px-2 py-0.5 rounded text-slate-800 font-mono font-bold text-center disabled:opacity-40" /></div>
+                                    <div><label className="block text-[10px] text-slate-400 font-bold mb-0.5">💡 扣款當日實際匯率</label><input type="number" step="any" value={txForm.txRate} onChange={handleFormInput} name="txRate" disabled={!(isNaN(txForm.symbol)&&!txForm.symbol.endsWith('A'))} className="w-full bg-slate-50 border border-slate-200 px-2 py-0.5 rounded text-slate-800 font-mono font-bold text-center disabled:opacity-40" /></div>
                                 </div>
                                 <button type="submit" className="w-full bg-slate-900 text-white font-bold py-2.5 rounded-xl text-xs hover:bg-slate-800 shadow">儲存交易資產</button>
                             </form>
-                            <table className="w-full text-left text-sm">
-                                <thead><tr className="text-slate-400 text-xs border-b"><th>日期</th><th>標的</th><th>種類</th><th>單價</th><th>股數</th><th>歷史成交匯率</th><th>實扣費用</th><th>操作</th></tr></thead>
-                                <tbody>
-                                    {transactions.map(t=>(<tr key={t.id} class="border-b"><td className="py-3 text-xs text-slate-400 font-mono">{t.date}</td><td className="py-3 font-bold">{t.symbol}</td><td><span className={`px-2 py-0.5 rounded text-[10px] font-bold ${t.type==='BUY'?'bg-rose-50 text-rose-600':'bg-emerald-50 text-emerald-600'}`}>{t.type==='BUY'?'買入':'賣出'}</span></td><td className="py-3 font-mono">${t.price}</td><td className="py-3 font-mono">{t.shares}</td><td className="py-3 font-mono text-slate-500">{t.market==='TW'?'1.00':`1 USD = ${t.txRate} TWD`}</td><td className="py-3 font-mono text-slate-400">${t.fee}</td><td><button onClick={()=>setTransactions(transactions.filter(x=>x.id!==t.id))} className="text-slate-300 hover:text-rose-500">🗑️</button></td></tr>))}
-                                </tbody>
-                            </table>
-                        </div>
-                    )}
-
-                    {/* Tab 3: 配息 */}
-                    {activeTab === 'dividend' && (
-                        <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm space-y-6">
-                            <form onSubmit={(e)=>{e.preventDefault(); if(!divForm.symbol||!divForm.amount)return; setDividends([{...divForm, id:Date.now().toString(), name:STOCK_NAMES[divForm.symbol.toUpperCase().trim()]||divForm.symbol}, ...dividends]); setDivForm({date:new Date().toISOString().split('T')[0], market:divForm.market, symbol:'', amount:'', taxWithheld:'0', netAmount:''});}} className="grid grid-cols-1 sm:grid-cols-5 gap-3 items-end bg-slate-50 p-4 rounded-xl border border-slate-100">
-                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">配息日期</label><input type="date" value={divForm.date} onChange={e=>setDivForm({...divForm, date:e.target.value})} className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div>
-                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">代號/市場</label><div className="flex gap-1"><input type="text" placeholder="0056" value={divForm.symbol} onChange={handleDivFormChange} name="symbol" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs uppercase font-mono" /><select value={divForm.market} onChange={handleDivFormChange} name="market" className="bg-white border border-slate-200 p-2 rounded-lg text-xs"><option value="TW">台</option><option value="US">美</option></select></div></div>
-                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">原始配息額</label><input type="number" placeholder="配息金額" value={divForm.amount} onChange={handleDivFormChange} name="amount" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div>
-                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">實收淨額</label><input type="number" value={divForm.netAmount} readOnly className="w-full bg-slate-100 border border-slate-200 p-2 rounded-lg text-xs font-bold text-teal-600 font-mono" /></div>
-                                <button type="submit" className="w-full bg-slate-900 text-white font-bold py-2 rounded-lg text-xs hover:bg-slate-800">存入配息本</button>
-                            </form>
-                        </div>
-                    )}
-
-                    {/* Tab 4: 同步時光機傳輸面板 */}
-                    {activeTab === 'drive' && (
-                        <div className="max-w-md mx-auto bg-white border border-slate-100 rounded-2xl p-6 shadow-sm space-y-5">
-                            <h3 className="font-extrabold text-slate-800 text-sm">Google Drive 歷史時光機備份機制</h3>
-                            <input type="text" placeholder="貼上 Client ID" value={gdriveClientId} onChange={e=>setGdriveClientId(e.target.value)} className="w-full bg-slate-50 border border-slate-200 p-3 rounded-xl text-xs font-mono"/>
-                            <button onClick={handleGoogleLogin} className="w-full bg-slate-900 text-white font-bold py-2.5 rounded-xl text-sm transition hover:bg-slate-800 flex items-center justify-center gap-2">🔑 授權登入 Google Drive</button>
-                            
-                            <div className="pt-4 border-t border-slate-100 space-y-3">
-                                <button onClick={uploadToCloud} disabled={!gdriveToken || isSyncing} className="w-full bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-white text-xs font-bold py-2.5 rounded-xl transition shadow-sm">
-                                    {isSyncing ? '上傳中...' : '📤 建立本日獨立日期備份存檔'}
-                                </button>
-                                
-                                {/* ✨ 智慧升級：歷史日期存檔下拉還原選單 ✨ */}
-                                <div className="bg-slate-50 p-4 rounded-xl border border-slate-200/60 space-y-2">
-                                    <label className="block text-[11px] text-slate-500 font-bold">⏱️ 選擇雲端硬碟中的歷史版本：</label>
-                                    <select value={selectedFileId} onChange={e=>setSelectedFileId(e.target.value)} disabled={!gdriveToken || cloudFiles.length===0} className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs font-mono font-bold text-slate-800">
-                                        {cloudFiles.length === 0 ? (
-                                            <option>-- 尚無可選的歷史存檔 (請先授權或備份) --</option>
-                                        ) : (
-                                            cloudFiles.map(f => (
-                                                <option key={f.id} value={f.id}>{f.name} ({new Date(f.createdTime).toLocaleTimeString()})</option>
-                                            ))
-                                        )}
-                                    </select>
-                                    <button onClick={downloadFromCloud} disabled={!gdriveToken || cloudFiles.length===0 || isSyncing} className="w-full bg-slate-200 hover:bg-slate-300 disabled:opacity-40 text-slate-800 text-xs font-bold py-2 rounded-lg transition border border-slate-300">
-                                        {isSyncing ? '讀取中...' : '📥 載入並還原所選日期版本'}
-                                    </button>
-                                </div>
+                            <div className="overflow-x-auto">
+                                <table className="w-full text-left text-sm">
+                                    <thead><tr className="text-slate-400 text-xs border-b"><th>日期</th><th>標的</th><th>市場</th><th>種類</th><th>單價</th><th>股數</th><th>扣款匯率</th><th>操作</th></tr></thead>
+                                    <tbody>
+                                        {transactions.map(t=>(<tr key={t.id} className="border-b"><td className="py-3 text-xs text-slate-400 font-mono">{t.date}</td><td className="py-3 font-bold">{t.symbol}</td><td className="text-xs">{t.market==='US'?'🇺🇸 美股':'🇹🇼 台股'}</td><td><span className={`px-2 py-0.5 rounded text-[10px] font-bold ${t.type==='BUY'?'bg-rose-50 text-rose-600':'bg-emerald-50 text-emerald-600'}`}>{t.type==='BUY'?'買入':'賣出'}</span></td><td className="py-3 font-mono">${t.price}</td><td className="py-3 font-mono">{t.shares}</td><td className="py-3 font-mono text-slate-500">{t.market==='TW'?'1.00':t.txRate}</td><td><button onClick={()=>setTransactions(transactions.filter(x=>x.id!==t.id))} className="text-slate-300 hover:text-rose-500">🗑️</button></td></tr>))}
+                                    </tbody>
+                                </table>
                             </div>
                         </div>
                     )}
