@@ -375,46 +375,50 @@
                 setDivForm(updated);
             };
 
-            // ===== JSONBin 家庭共用同步 =====
+            // ===== GitHub Gist 家庭共用同步 =====
+            const GH_HEADERS = (token) => ({ 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'X-GitHub-Api-Version': '2022-11-28' });
+            const GH_PAYLOAD = () => JSON.stringify({ transactions, dividends, savedAt: new Date().toISOString() });
+
             const handleJbCreate = async () => {
-                if (!jbKey.trim()) { alert('請先輸入 API Key'); return; }
+                if (!jbKey.trim()) { alert('請先輸入 GitHub Token'); return; }
                 setIsJbSyncing(true); setJbStatus('建立中...');
                 try {
-                    const res = await fetch('https://api.jsonbin.io/v3/b', {
+                    const res = await fetch('https://api.github.com/gists', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json', 'X-Master-Key': jbKey.trim(), 'X-Bin-Name': 'glowwealth-family', 'X-Bin-Private': 'true' },
-                        body: JSON.stringify({ transactions, dividends, savedAt: new Date().toISOString() })
+                        headers: GH_HEADERS(jbKey.trim()),
+                        body: JSON.stringify({ description: 'GlowWealth 家庭共用資料', public: false, files: { 'glowwealth.json': { content: GH_PAYLOAD() } } })
                     });
                     const data = await res.json();
-                    if (data?.metadata?.id) { setJbBinId(data.metadata.id); setJbStatus('✓ 共用空間建立成功，請把 Bin ID 傳給家人'); }
-                    else setJbStatus('建立失敗：' + JSON.stringify(data));
+                    if (data?.id) { setJbBinId(data.id); setJbStatus('✓ 共用空間建立成功！把 Token + Gist ID 傳給家人'); }
+                    else setJbStatus('建立失敗：' + (data.message || '請確認 Token 有 gist 權限'));
                 } catch(e) { setJbStatus('建立失敗：' + e.message); }
                 setIsJbSyncing(false);
             };
             const handleJbUpload = async () => {
-                if (!jbKey.trim() || !jbBinId.trim()) { alert('請先設定 API Key 和 Bin ID'); return; }
+                if (!jbKey.trim() || !jbBinId.trim()) { alert('請先設定 Token 和 Gist ID'); return; }
                 setIsJbSyncing(true); setJbStatus('上傳中...');
                 try {
-                    const res = await fetch(`https://api.jsonbin.io/v3/b/${jbBinId.trim()}`, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json', 'X-Master-Key': jbKey.trim() },
-                        body: JSON.stringify({ transactions, dividends, savedAt: new Date().toISOString() })
+                    const res = await fetch(`https://api.github.com/gists/${jbBinId.trim()}`, {
+                        method: 'PATCH',
+                        headers: GH_HEADERS(jbKey.trim()),
+                        body: JSON.stringify({ files: { 'glowwealth.json': { content: GH_PAYLOAD() } } })
                     });
                     setJbStatus(res.ok ? '✓ 上傳成功 ' + new Date().toLocaleTimeString() : '上傳失敗 ' + res.status);
                 } catch(e) { setJbStatus('上傳失敗：' + e.message); }
                 setIsJbSyncing(false);
             };
             const handleJbDownload = async () => {
-                if (!jbKey.trim() || !jbBinId.trim()) { alert('請先設定 API Key 和 Bin ID'); return; }
+                if (!jbKey.trim() || !jbBinId.trim()) { alert('請先設定 Token 和 Gist ID'); return; }
                 if (!confirm('確定從共用空間載入？本機資料將被覆蓋。')) return;
                 setIsJbSyncing(true); setJbStatus('下載中...');
                 try {
-                    const res = await fetch(`https://api.jsonbin.io/v3/b/${jbBinId.trim()}/latest`, {
-                        headers: { 'X-Master-Key': jbKey.trim() }
-                    });
-                    const data = await res.json();
-                    if (data?.record?.transactions) setTransactions(data.record.transactions);
-                    if (data?.record?.dividends) setDividends(data.record.dividends);
+                    const res = await fetch(`https://api.github.com/gists/${jbBinId.trim()}`, { headers: GH_HEADERS(jbKey.trim()) });
+                    const gist = await res.json();
+                    const content = gist?.files?.['glowwealth.json']?.content;
+                    if (!content) { setJbStatus('找不到資料，請確認 Gist ID'); setIsJbSyncing(false); return; }
+                    const data = JSON.parse(content);
+                    if (data.transactions) setTransactions(data.transactions);
+                    if (data.dividends) setDividends(data.dividends);
                     setJbStatus('✓ 載入成功 ' + new Date().toLocaleTimeString());
                 } catch(e) { setJbStatus('載入失敗：' + e.message); }
                 setIsJbSyncing(false);
@@ -702,12 +706,12 @@
                                 </div>
                                 <div className="space-y-3">
                                     <div>
-                                        <label className="text-[11px] font-bold text-slate-500 block mb-1">JSONBin API Key（Master Key）</label>
-                                        <input type="password" placeholder="$2b$10$..." value={jbKey} onChange={e => setJbKey(e.target.value)} className="w-full bg-slate-50 border border-slate-200 p-2.5 rounded-xl text-xs font-mono" />
-                                        <div className="text-[10px] text-slate-400 mt-1">免費申請：<a href="https://jsonbin.io" target="_blank" className="text-blue-500 underline">jsonbin.io</a> → 登入 → API Keys → 複製 Master Key</div>
+                                        <label className="text-[11px] font-bold text-slate-500 block mb-1">GitHub Token</label>
+                                        <input type="password" placeholder="github_pat_..." value={jbKey} onChange={e => setJbKey(e.target.value)} className="w-full bg-slate-50 border border-slate-200 p-2.5 rounded-xl text-xs font-mono" />
+                                        <div className="text-[10px] text-slate-400 mt-1">申請：<a href="https://github.com/settings/tokens?type=beta" target="_blank" className="text-blue-500 underline">github.com → Settings → Developer settings → Personal access tokens → Fine-grained tokens</a>，權限只需勾選 <strong>Gists（read & write）</strong></div>
                                     </div>
                                     <div>
-                                        <label className="text-[11px] font-bold text-slate-500 block mb-1">共用空間 ID（Bin ID）</label>
+                                        <label className="text-[11px] font-bold text-slate-500 block mb-1">共用空間 ID（Gist ID）</label>
                                         <input type="text" placeholder="第一次使用請點「建立新共用空間」" value={jbBinId} onChange={e => setJbBinId(e.target.value)} className="w-full bg-slate-50 border border-slate-200 p-2.5 rounded-xl text-xs font-mono" />
                                     </div>
                                     {jbStatus && <div className={`text-xs font-bold px-3 py-2 rounded-xl ${jbStatus.startsWith('✓') ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{jbStatus}</div>}
