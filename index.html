@@ -2,49 +2,89 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <title>GlowWealth - 強制修復版</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GlowWealth - 家庭投資與配息總覽</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
-<body class="bg-slate-100">
+<body class="bg-slate-50 text-slate-800 antialiased min-h-screen">
     <div id="root"></div>
 
     <script type="text/babel">
-        function App() {
-            const [activeTab, setActiveTab] = React.useState('dashboard');
+        const { useState, useEffect, useMemo } = React;
 
-            // 確保初始化時絕對不會因為壞資料而崩潰
-            React.useEffect(() => {
-                try {
-                    if (!localStorage.getItem('gw_init')) {
-                        localStorage.clear();
-                        localStorage.setItem('gw_init', 'true');
-                    }
-                } catch (e) { console.error(e); }
-            }, []);
+        const STOCK_NAMES = {
+          '0050': '元大台灣50', '00878': '國泰永續高股息', '00929': '復華台灣科技優息', '2330': '台積電',
+          '00919': '群益台灣精選高息', '6438': '訊得機械', '2881': '富邦金控', '8462': '柏文', '009811': '統一美國50',
+          '2890': '永豐金', 'QQQ': '納斯達克 100 ETF', 'VOO': '標普 500 ETF', 'VT': 'Vanguard 全球股票', 
+          '1313': '聯成', '00981A': '統一台股增長', '00982A': '群益台灣強棒', '00403A': '統一升級50', 
+          '5289': '宜鼎', '2317': '鴻海', '2454': '聯發科', 'TSLA': '特斯拉', 'NVDA': '輝達'
+        };
+
+        function App() {
+            const [activeTab, setActiveTab] = useState('dashboard');
+            const [transactions, setTransactions] = useState(() => JSON.parse(localStorage.getItem('gw_v15_txs') || '[]'));
+            const [dividends, setDividends] = useState(() => JSON.parse(localStorage.getItem('gw_v15_divs') || '[]'));
+            const [gdriveClientId, setGdriveClientId] = useState(() => localStorage.getItem('gw_client_id') || '');
+            const [gdriveToken, setGdriveToken] = useState(null);
+            
+            // 基礎設定
+            const [txForm, setTxForm] = useState({ date: new Date().toISOString().split('T')[0], symbol: '', type: 'BUY', price: '', shares: '', fee: '20', tax: '0', txRate: '1' });
+            const [divForm, setDivForm] = useState({ date: new Date().toISOString().split('T')[0], market: 'TW', symbol: '', amount: '', taxWithheld: '0', netAmount: '' });
+
+            useEffect(() => {
+                localStorage.setItem('gw_v15_txs', JSON.stringify(transactions));
+                localStorage.setItem('gw_v15_divs', JSON.stringify(dividends));
+            }, [transactions, dividends]);
 
             return (
-                <div className="p-6 max-w-2xl mx-auto">
-                    <h1 className="text-xl font-bold mb-4">GlowWealth 強制修復版</h1>
-                    <div className="flex gap-2 mb-4">
+                <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-6">
+                    <div className="flex gap-2 bg-slate-200/50 p-1 rounded-xl w-full md:w-80">
                         {['dashboard', 'ledger', 'dividend', 'drive'].map(t => (
-                            <button key={t} onClick={() => setActiveTab(t)} className={`px-4 py-2 rounded ${activeTab === t ? 'bg-blue-600 text-white' : 'bg-white'}`}>
-                                {t}
+                            <button key={t} onClick={() => setActiveTab(t)} className={`flex-1 py-2 rounded-lg text-xs font-bold ${activeTab === t ? 'bg-white text-slate-900 shadow' : 'text-slate-500'}`}>
+                                {t==='dashboard'?'總覽':t==='ledger'?'記帳':t==='dividend'?'配息':'同步'}
                             </button>
                         ))}
                     </div>
-                    <div className="bg-white p-6 rounded shadow">
-                        <p>目前分頁: <strong>{activeTab}</strong></p>
-                        <p className="text-gray-500 mt-2">如果這頁能看到，代表 React 核心引擎已成功啟動！</p>
-                    </div>
+
+                    {activeTab === 'dashboard' && <div className="p-6 bg-white rounded-2xl border shadow-sm">總覽資料顯示中... (確認資料無誤)</div>}
+                    
+                    {activeTab === 'ledger' && (
+                        <div className="bg-white border rounded-2xl p-6 shadow-sm">
+                            <h2 className="font-bold mb-4">交易記帳本</h2>
+                            <form onSubmit={(e)=>{e.preventDefault(); setTransactions([{...txForm, id:Date.now().toString()}, ...transactions]);}} className="grid grid-cols-2 gap-4">
+                                <input className="border p-2 rounded" placeholder="代號" onChange={e=>setTxForm({...txForm, symbol:e.target.value})} />
+                                <input className="border p-2 rounded" placeholder="單價" onChange={e=>setTxForm({...txForm, price:e.target.value})} />
+                                <button type="submit" className="bg-slate-900 text-white p-2 rounded">儲存</button>
+                            </form>
+                        </div>
+                    )}
+
+                    {activeTab === 'dividend' && (
+                        <div className="bg-white border rounded-2xl p-6 shadow-sm">
+                            <h2 className="font-bold mb-4">配息紀錄</h2>
+                            <form onSubmit={(e)=>{e.preventDefault(); setDividends([{...divForm, id:Date.now().toString()}, ...dividends]);}} className="grid grid-cols-2 gap-4">
+                                <input className="border p-2 rounded" placeholder="代號" onChange={e=>setDivForm({...divForm, symbol:e.target.value})} />
+                                <input className="border p-2 rounded" placeholder="金額" onChange={e=>setDivForm({...divForm, amount:e.target.value})} />
+                                <button type="submit" className="bg-slate-900 text-white p-2 rounded">存入配息</button>
+                            </form>
+                        </div>
+                    )}
+
+                    {activeTab === 'drive' && (
+                        <div className="bg-white border rounded-2xl p-6 shadow-sm">
+                            <h2 className="font-bold mb-4">雲端同步設定</h2>
+                            <button className="bg-blue-600 text-white p-2 rounded">授權 Google Drive</button>
+                        </div>
+                    )}
                 </div>
             );
         }
 
-        const container = document.getElementById('root');
-        const root = ReactDOM.createRoot(container);
+        const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
     </script>
 </body>
