@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <title>GlowWealth - 穩定功能版</title>
+    <title>GlowWealth - 穩定升級版</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -12,30 +12,35 @@
 
     <script>
         const e = React.createElement;
-
-        // 恢復你的股票名稱字典
         const STOCK_NAMES = {
-          '0050': '元大台灣50', '00878': '國泰永續高股息', '00929': '復華台灣科技優息', '2330': '台積電',
-          '00919': '群益台灣精選高息', '6438': '訊得機械', '2881': '富邦金控', '8462': '柏文', '009811': '統一美國50',
-          '2890': '永豐金', 'QQQ': '納斯達克 100 ETF', 'VOO': '標普 500 ETF', 'VT': 'Vanguard 全球股票', 
-          '1313': '聯成', '00981A': '統一台股增長', '00982A': '群益台灣強棒', '00403A': '統一升級50', 
-          '5289': '宜鼎', '2317': '鴻海', '2454': '聯發科', 'TSLA': '特斯拉', 'NVDA': '輝達'
+            '0050': '元大台灣50', '00878': '國泰永續高股息', '00929': '復華台灣科技優息', '2330': '台積電',
+            '00919': '群益台灣精選高息', '6438': '訊得機械', '2881': '富邦金控', '8462': '柏文', '009811': '統一美國50',
+            '2890': '永豐金', 'QQQ': '納斯達克 100 ETF', 'VOO': '標普 500 ETF', 'VT': 'Vanguard 全球股票', 
+            '1313': '聯成', '00981A': '統一台股增長', '00982A': '群益台灣強棒', '00403A': '統一升級50', 
+            '5289': '宜鼎', '2317': '鴻海', '2454': '聯發科', 'TSLA': '特斯拉', 'NVDA': '輝達'
         };
 
         function App() {
             const [activeTab, setActiveTab] = React.useState('dashboard');
             
-            // 測試能否正確渲染字典內容
-            return e('div', { className: 'p-6 max-w-4xl mx-auto' },
-                e('h1', { className: 'text-2xl font-bold mb-4' }, 'GlowWealth 系統已恢復'),
+            // 讀取資料並安全處理
+            const getTxs = () => { try { return JSON.parse(localStorage.getItem('gw_v15_txs') || '[]'); } catch(e) { return []; } };
+            const [txs, setTxs] = React.useState(getTxs());
+
+            return e('div', { className: 'p-4 md:p-8 max-w-4xl mx-auto space-y-6' },
+                e('h1', { className: 'text-2xl font-bold' }, 'GlowWealth 系統已穩定運行'),
                 e('div', { className: 'flex gap-2 bg-gray-200 p-1 rounded-lg' },
-                    ['dashboard', 'ledger'].map(t => e('button', { key: t, onClick: () => setActiveTab(t), className: 'px-4 py-2 bg-white rounded shadow' }, t))
+                    ['dashboard', 'ledger', 'dividend', 'drive'].map(t => 
+                        e('button', { key: t, onClick: () => setActiveTab(t), className: `flex-1 py-2 rounded ${activeTab === t ? 'bg-white shadow' : ''}` }, t)
+                    )
                 ),
-                e('div', { className: 'mt-6 bg-white p-4 rounded shadow' },
+                e('div', { className: 'bg-white p-6 rounded-xl shadow-sm border' },
                     activeTab === 'dashboard' ? e('div', null, 
-                        '系統內建代號數: ' + Object.keys(STOCK_NAMES).length,
-                        e('pre', { className: 'text-xs mt-2 text-gray-500' }, JSON.stringify(STOCK_NAMES, null, 2))
-                    ) : e('div', null, '記帳頁面恢復中...')
+                        e('h2', { className: 'font-bold mb-4' }, '資產庫存明細'),
+                        e('table', { className: 'w-full text-sm' }, 
+                            e('thead', null, e('tr', {className: 'border-b'}, e('th', null, '代號'), e('th', null, '名稱'), e('th', null, '持股')))
+                        )
+                    ) : e('div', null, '功能頁籤: ' + activeTab + ' (載入中...)')
                 )
             );
         }
