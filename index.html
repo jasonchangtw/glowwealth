@@ -2,47 +2,49 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>GlowWealth - 穩定版</title>
+    <title>GlowWealth - 強制修復版</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 </head>
-<body class="bg-slate-50 text-slate-800">
+<body class="bg-slate-100">
     <div id="root"></div>
 
     <script type="text/babel">
-        const { useState } = React;
-
         function App() {
-            const [activeTab, setActiveTab] = useState('dashboard');
-            
+            const [activeTab, setActiveTab] = React.useState('dashboard');
+
+            // 確保初始化時絕對不會因為壞資料而崩潰
+            React.useEffect(() => {
+                try {
+                    if (!localStorage.getItem('gw_init')) {
+                        localStorage.clear();
+                        localStorage.setItem('gw_init', 'true');
+                    }
+                } catch (e) { console.error(e); }
+            }, []);
+
             return (
-                <div className="p-4 md:p-8 max-w-4xl mx-auto space-y-6">
-                    <h1 className="text-2xl font-bold">GlowWealth 穩定版</h1>
-                    
-                    {/* 導航 */}
-                    <div className="flex gap-2 bg-gray-200 p-1 rounded-lg">
+                <div className="p-6 max-w-2xl mx-auto">
+                    <h1 className="text-xl font-bold mb-4">GlowWealth 強制修復版</h1>
+                    <div className="flex gap-2 mb-4">
                         {['dashboard', 'ledger', 'dividend', 'drive'].map(t => (
-                            <button key={t} onClick={() => setActiveTab(t)} className={`flex-1 py-2 rounded ${activeTab === t ? 'bg-white shadow' : ''}`}>
-                                {t === 'dashboard' ? '總覽' : t === 'ledger' ? '記帳' : t === 'dividend' ? '配息' : '同步'}
+                            <button key={t} onClick={() => setActiveTab(t)} className={`px-4 py-2 rounded ${activeTab === t ? 'bg-blue-600 text-white' : 'bg-white'}`}>
+                                {t}
                             </button>
                         ))}
                     </div>
-
-                    {/* 內容區：確保不會崩潰的呈現方式 */}
-                    <div className="bg-white p-6 rounded-xl shadow-sm border">
-                        {activeTab === 'dashboard' && <p>總覽頁面已恢復穩定。</p>}
-                        {activeTab === 'ledger' && <p>記帳功能已恢復穩定。</p>}
-                        {activeTab === 'dividend' && <p>配息功能已恢復穩定。</p>}
-                        {activeTab === 'drive' && <p>同步功能已恢復穩定。</p>}
+                    <div className="bg-white p-6 rounded shadow">
+                        <p>目前分頁: <strong>{activeTab}</strong></p>
+                        <p className="text-gray-500 mt-2">如果這頁能看到，代表 React 核心引擎已成功啟動！</p>
                     </div>
                 </div>
             );
         }
 
-        const root = ReactDOM.createRoot(document.getElementById('root'));
+        const container = document.getElementById('root');
+        const root = ReactDOM.createRoot(container);
         root.render(<App />);
     </script>
 </body>
