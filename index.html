@@ -2,56 +2,90 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <title>GlowWealth - 數據恢復版</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GlowWealth - 家庭投資與配息總覽</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
-<body class="bg-slate-50">
+<body class="bg-slate-50 text-slate-800 antialiased min-h-screen">
     <div id="root"></div>
 
-    <script>
-        const e = React.createElement;
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        const STOCK_NAMES = {
+          '0050': '元大台灣50', '00878': '國泰永續高股息', '00929': '復華台灣科技優息', '2330': '台積電',
+          '00919': '群益台灣精選高息', '6438': '訊得機械', '2881': '富邦金控', '8462': '柏文', '009811': '統一美國50',
+          '2890': '永豐金', 'QQQ': '納斯達克 100 ETF', 'VOO': '標普 500 ETF', 'VT': 'Vanguard 全球股票', 
+          '1313': '聯成', '00981A': '統一台股增長', '00982A': '群益台灣強棒', '00403A': '統一升級50', 
+          '5289': '宜鼎', '2317': '鴻海', '2454': '聯發科', 'TSLA': '特斯拉', 'NVDA': '輝達'
+        };
 
         function App() {
-            const [activeTab, setActiveTab] = React.useState('dashboard');
-            const [txs, setTxs] = React.useState([]);
+            const [activeTab, setActiveTab] = useState('dashboard');
+            const [transactions, setTransactions] = useState(() => JSON.parse(localStorage.getItem('gw_v15_txs') || '[]'));
+            const [dividends, setDividends] = useState(() => JSON.parse(localStorage.getItem('gw_v15_divs') || '[]'));
+            const [gdriveClientId, setGdriveClientId] = useState(() => localStorage.getItem('gw_client_id') || '');
+            const [gdriveToken, setGdriveToken] = useState(null);
+            
+            // 基礎設定
+            const [txForm, setTxForm] = useState({ date: new Date().toISOString().split('T')[0], symbol: '', type: 'BUY', price: '', shares: '', fee: '20', tax: '0', txRate: '1' });
+            const [divForm, setDivForm] = useState({ date: new Date().toISOString().split('T')[0], market: 'TW', symbol: '', amount: '', taxWithheld: '0', netAmount: '' });
 
-            // 數據恢復邏輯：強制從你原本存放的 key 讀取
-            React.useEffect(() => {
-                try {
-                    const saved = localStorage.getItem('gw_v15_txs');
-                    if (saved) {
-                        setTxs(JSON.parse(saved));
-                    }
-                } catch (err) {
-                    console.error("資料讀取失敗，可能是格式舊了", err);
-                }
-            }, []);
+            useEffect(() => {
+                localStorage.setItem('gw_v15_txs', JSON.stringify(transactions));
+                localStorage.setItem('gw_v15_divs', JSON.stringify(dividends));
+            }, [transactions, dividends]);
 
-            return e('div', { className: 'p-4 md:p-8 max-w-4xl mx-auto' },
-                e('h1', { className: 'text-2xl font-bold mb-6' }, 'GlowWealth 總覽'),
-                e('div', { className: 'flex gap-2 bg-gray-200 p-1 rounded-lg mb-6' },
-                    ['dashboard', 'ledger'].map(t => e('button', { key: t, onClick: () => setActiveTab(t), className: `flex-1 py-2 rounded ${activeTab === t ? 'bg-white shadow' : ''}` }, t))
-                ),
-                activeTab === 'dashboard' ? e('div', { className: 'bg-white p-6 rounded-xl shadow-sm border' },
-                    e('table', { className: 'w-full text-left' },
-                        e('thead', null, e('tr', {className: 'border-b text-xs text-gray-400'}, e('th', {className: 'p-2'}, '代號'), e('th', {className: 'p-2'}, '持股'), e('th', {className: 'p-2'}, '總成本'))),
-                        e('tbody', null, txs.length === 0 ? 
-                            e('tr', null, e('td', {colSpan: 3, className: 'p-4 text-center text-gray-500'}, '目前沒有交易紀錄')) : 
-                            txs.map(t => e('tr', {key: t.id, className: 'border-b'}, 
-                                e('td', {className: 'p-2 font-bold'}, t.symbol),
-                                e('td', {className: 'p-2'}, t.shares),
-                                e('td', {className: 'p-2'}, '$' + (Number(t.price || 0) * Number(t.shares || 0)).toFixed(2))
-                            ))
-                        )
-                    )
-                ) : e('div', { className: 'bg-white p-6 rounded-xl shadow-sm border' }, '記帳功能頁面 (恢復中...)')
+            return (
+                <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-6">
+                    <div className="flex gap-2 bg-slate-200/50 p-1 rounded-xl w-full md:w-80">
+                        {['dashboard', 'ledger', 'dividend', 'drive'].map(t => (
+                            <button key={t} onClick={() => setActiveTab(t)} className={`flex-1 py-2 rounded-lg text-xs font-bold ${activeTab === t ? 'bg-white text-slate-900 shadow' : 'text-slate-500'}`}>
+                                {t==='dashboard'?'總覽':t==='ledger'?'記帳':t==='dividend'?'配息':'同步'}
+                            </button>
+                        ))}
+                    </div>
+
+                    {activeTab === 'dashboard' && <div className="p-6 bg-white rounded-2xl border shadow-sm">總覽資料顯示中... (確認資料無誤)</div>}
+                    
+                    {activeTab === 'ledger' && (
+                        <div className="bg-white border rounded-2xl p-6 shadow-sm">
+                            <h2 className="font-bold mb-4">交易記帳本</h2>
+                            <form onSubmit={(e)=>{e.preventDefault(); setTransactions([{...txForm, id:Date.now().toString()}, ...transactions]);}} className="grid grid-cols-2 gap-4">
+                                <input className="border p-2 rounded" placeholder="代號" onChange={e=>setTxForm({...txForm, symbol:e.target.value})} />
+                                <input className="border p-2 rounded" placeholder="單價" onChange={e=>setTxForm({...txForm, price:e.target.value})} />
+                                <button type="submit" className="bg-slate-900 text-white p-2 rounded">儲存</button>
+                            </form>
+                        </div>
+                    )}
+
+                    {activeTab === 'dividend' && (
+                        <div className="bg-white border rounded-2xl p-6 shadow-sm">
+                            <h2 className="font-bold mb-4">配息紀錄</h2>
+                            <form onSubmit={(e)=>{e.preventDefault(); setDividends([{...divForm, id:Date.now().toString()}, ...dividends]);}} className="grid grid-cols-2 gap-4">
+                                <input className="border p-2 rounded" placeholder="代號" onChange={e=>setDivForm({...divForm, symbol:e.target.value})} />
+                                <input className="border p-2 rounded" placeholder="金額" onChange={e=>setDivForm({...divForm, amount:e.target.value})} />
+                                <button type="submit" className="bg-slate-900 text-white p-2 rounded">存入配息</button>
+                            </form>
+                        </div>
+                    )}
+
+                    {activeTab === 'drive' && (
+                        <div className="bg-white border rounded-2xl p-6 shadow-sm">
+                            <h2 className="font-bold mb-4">雲端同步設定</h2>
+                            <button className="bg-blue-600 text-white p-2 rounded">授權 Google Drive</button>
+                        </div>
+                    )}
+                </div>
             );
         }
 
         const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(e(App));
+        root.render(<App />);
     </script>
 </body>
 </html>
