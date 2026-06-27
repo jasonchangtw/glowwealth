@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <title>GlowWealth - 彙總修復版</title>
+    <title>GlowWealth - 數據恢復版</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -17,21 +17,17 @@
             const [activeTab, setActiveTab] = React.useState('dashboard');
             const [txs, setTxs] = React.useState([]);
 
+            // 數據恢復邏輯：強制從你原本存放的 key 讀取
             React.useEffect(() => {
-                const data = localStorage.getItem('gw_data');
-                if (data) try { setTxs(JSON.parse(data)); } catch(e) { setTxs([]); }
+                try {
+                    const saved = localStorage.getItem('gw_v15_txs');
+                    if (saved) {
+                        setTxs(JSON.parse(saved));
+                    }
+                } catch (err) {
+                    console.error("資料讀取失敗，可能是格式舊了", err);
+                }
             }, []);
-
-            // 核心功能：資產合併計算
-            const portfolio = React.useMemo(() => {
-                const map = {};
-                txs.forEach(t => {
-                    if (!map[t.symbol]) map[t.symbol] = { symbol: t.symbol, shares: 0, cost: 0 };
-                    map[t.symbol].shares += Number(t.shares || 0);
-                    map[t.symbol].cost += (Number(t.price || 0) * Number(t.shares || 0));
-                });
-                return Object.values(map);
-            }, [txs]);
 
             return e('div', { className: 'p-4 md:p-8 max-w-4xl mx-auto' },
                 e('h1', { className: 'text-2xl font-bold mb-6' }, 'GlowWealth 總覽'),
@@ -40,14 +36,17 @@
                 ),
                 activeTab === 'dashboard' ? e('div', { className: 'bg-white p-6 rounded-xl shadow-sm border' },
                     e('table', { className: 'w-full text-left' },
-                        e('thead', null, e('tr', {className: 'border-b text-xs text-gray-400'}, e('th', {className: 'p-2'}, '代號'), e('th', {className: 'p-2'}, '總持股'), e('th', {className: 'p-2'}, '總成本'))),
-                        e('tbody', null, portfolio.map(p => e('tr', {key: p.symbol, className: 'border-b'}, 
-                            e('td', {className: 'p-2 font-bold'}, p.symbol),
-                            e('td', {className: 'p-2'}, p.shares),
-                            e('td', {className: 'p-2'}, '$' + p.cost.toFixed(2))
-                        )))
+                        e('thead', null, e('tr', {className: 'border-b text-xs text-gray-400'}, e('th', {className: 'p-2'}, '代號'), e('th', {className: 'p-2'}, '持股'), e('th', {className: 'p-2'}, '總成本'))),
+                        e('tbody', null, txs.length === 0 ? 
+                            e('tr', null, e('td', {colSpan: 3, className: 'p-4 text-center text-gray-500'}, '目前沒有交易紀錄')) : 
+                            txs.map(t => e('tr', {key: t.id, className: 'border-b'}, 
+                                e('td', {className: 'p-2 font-bold'}, t.symbol),
+                                e('td', {className: 'p-2'}, t.shares),
+                                e('td', {className: 'p-2'}, '$' + (Number(t.price || 0) * Number(t.shares || 0)).toFixed(2))
+                            ))
+                        )
                     )
-                ) : e('div', { className: 'bg-white p-6 rounded-xl shadow-sm border' }, '記帳頁面恢復中...')
+                ) : e('div', { className: 'bg-white p-6 rounded-xl shadow-sm border' }, '記帳功能頁面 (恢復中...)')
             );
         }
 
