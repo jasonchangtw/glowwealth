@@ -162,7 +162,8 @@
                     if (!summary[cleanSymbol]) {
                         summary[cleanSymbol] = {
                             symbol: cleanSymbol, name: STOCK_NAMES[cleanSymbol] || name || cleanSymbol, market: isUs ? 'US' : 'TW',
-                            totalShares: 0, totalBuyShares: 0, totalBuyCostTwd: 0, realizedProfitTwd: 0
+                            totalShares: 0, totalBuyShares: 0, totalBuyCostTwd: 0, realizedProfitTwd: 0,
+                            totalSellRevenueTwd: 0, lastSellDate: null
                         };
                     }
 
@@ -177,6 +178,8 @@
                         const currentAvgCostTwd = summary[cleanSymbol].totalShares > 0 ? (summary[cleanSymbol].totalBuyCostTwd / summary[cleanSymbol].totalBuyShares) : 0;
                         const sellRevenueTwd = ((s * p) - f - t2) * (isUs ? rate : 1);
                         summary[cleanSymbol].realizedProfitTwd += sellRevenueTwd - (s * currentAvgCostTwd);
+                        summary[cleanSymbol].totalSellRevenueTwd += sellRevenueTwd;
+                        summary[cleanSymbol].lastSellDate = tx.date;
                         summary[cleanSymbol].totalShares -= s;
                     }
                 });
@@ -483,10 +486,10 @@
                         </div>
                     </div>
 
-                    <div className="flex gap-1 bg-slate-200/50 p-1 rounded-xl w-full md:w-80">
-                        {['dashboard', 'ledger', 'dividend', 'drive'].map(t => (
+                    <div className="flex gap-1 bg-slate-200/50 p-1 rounded-xl w-full md:w-96">
+                        {['dashboard', 'realized', 'ledger', 'dividend', 'drive'].map(t => (
                             <button key={t} onClick={() => setActiveTab(t)} className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${activeTab === t ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>
-                                {t==='dashboard'?'總覽':t==='ledger'?'記帳':t==='dividend'?'配息':'同步'}
+                                {t==='dashboard'?'總覽':t==='realized'?'已實現':t==='ledger'?'記帳':t==='dividend'?'配息':'同步'}
                             </button>
                         ))}
                     </div>
@@ -531,7 +534,7 @@
                                     </tr>
                                 );
                                 const renderMarketSection = (mkt) => {
-                                    const mktP = portfolio.filter(p => p.market === mkt);
+                                    const mktP = portfolio.filter(p => p.market === mkt && p.currentShares > 0);
                                     if (mktP.length === 0) return null;
                                     const isTW = mkt === 'TW';
                                     const mktStats = isTW
@@ -599,6 +602,73 @@
                             })()}
                         </div>
                     )}
+
+                    {/* Tab: 已實現損益 */}
+                    {activeTab === 'realized' && (() => {
+                        const realizedList = portfolio
+                            .filter(p => p.currentShares <= 0 && p.realizedProfitTwd !== 0)
+                            .map(p => {
+                                const soldCost = (p.totalSellRevenueTwd || 0) - (p.realizedProfitTwd || 0);
+                                const totalReturn = (p.realizedProfitTwd || 0) + (p.accumulatedDividend || 0);
+                                const roi = soldCost > 0 ? (totalReturn / soldCost) * 100 : 0;
+                                return { ...p, soldCost, totalReturn, realizedRoi: roi };
+                            })
+                            .sort((a, b) => new Date(b.lastSellDate || 0) - new Date(a.lastSellDate || 0));
+
+                        const sum = realizedList.reduce((a, p) => ({
+                            realized: a.realized + (p.realizedProfitTwd || 0),
+                            divs: a.divs + (p.accumulatedDividend || 0),
+                            total: a.total + (p.totalReturn || 0),
+                            cost: a.cost + (p.soldCost || 0)
+                        }), { realized: 0, divs: 0, total: 0, cost: 0 });
+                        const sumRoi = sum.cost > 0 ? (sum.total / sum.cost) * 100 : 0;
+
+                        return (
+                            <div className="space-y-6">
+                                {/* 匯總卡片 */}
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                                    <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">已實現損益 (NT$)</div><div className={`text-xl font-black mt-1 ${sum.realized>=0?'text-rose-600':'text-emerald-600'}`}>{sum.realized>=0?'+':''}${Number(sum.realized).toLocaleString(undefined,{maximumFractionDigits:0})}</div></div>
+                                    <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">持有期間股息 (NT$)</div><div className="text-xl font-black text-amber-600 mt-1">${Number(sum.divs).toLocaleString(undefined,{maximumFractionDigits:0})}</div></div>
+                                    <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">合計總報酬 (NT$)</div><div className={`text-xl font-black mt-1 ${sum.total>=0?'text-rose-600':'text-emerald-600'}`}>{sum.total>=0?'+':''}${Number(sum.total).toLocaleString(undefined,{maximumFractionDigits:0})}</div></div>
+                                    <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm"><div className="text-[10px] font-bold text-slate-400 tracking-wider">合計報酬率</div><div className={`text-xl font-black mt-1 ${sumRoi>=0?'text-rose-600':'text-emerald-600'}`}>{sumRoi>=0?'+':''}{sumRoi.toFixed(2)}%</div></div>
+                                </div>
+
+                                {/* 明細列表 */}
+                                <div className="bg-white border border-slate-100 rounded-2xl p-4 shadow-sm">
+                                    <h3 className="font-extrabold text-slate-800 text-sm px-2 pt-2 pb-3">📦 已出場標的明細 <span className="text-xs font-normal text-slate-400">（持股歸零者；部分賣出的已實現損益仍顯示於總覽）</span></h3>
+                                    {realizedList.length === 0 ? (
+                                        <div className="p-10 text-center text-slate-400 text-sm">目前沒有已完全出場的標的</div>
+                                    ) : (
+                                        <div className="overflow-x-auto">
+                                            <table className="w-full text-left text-xs md:text-sm border-collapse">
+                                                <thead>
+                                                    <tr className="border-b border-slate-200 text-slate-500 font-bold bg-slate-50 text-[11px]">
+                                                        <th className="p-3">標的</th><th className="p-3">名稱</th><th className="p-3">市場</th><th className="p-3">出場日期</th><th className="p-3">投入成本(NT$)</th><th className="p-3">賣出總收入(NT$)</th><th className="p-3 text-emerald-600">已實現損益(NT$)</th><th className="p-3 text-amber-600">累計股息(NT$)</th><th className="p-3">總報酬(NT$)</th><th className="p-3 text-center">報酬率(%)</th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody className="divide-y divide-slate-100 font-medium">
+                                                    {realizedList.map(p => (
+                                                        <tr key={p.symbol} className="hover:bg-slate-50 transition">
+                                                            <td className="p-3 font-bold font-mono text-slate-900">{p.symbol}</td>
+                                                            <td className="p-3 text-slate-600">{p.name || p.symbol}</td>
+                                                            <td className="p-3">{p.market === 'TW' ? '🇹🇼' : '🇺🇸'}</td>
+                                                            <td className="p-3 font-mono text-slate-500">{p.lastSellDate || '-'}</td>
+                                                            <td className="p-3 font-mono text-slate-700">NT${Number(p.soldCost || 0).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+                                                            <td className="p-3 font-mono text-slate-900">NT${Number(p.totalSellRevenueTwd || 0).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+                                                            <td className={`p-3 font-mono font-bold ${Number(p.realizedProfitTwd||0)>=0?'text-rose-600':'text-emerald-600'}`}>{Number(p.realizedProfitTwd||0)>=0?'+':''}NT${Number(p.realizedProfitTwd||0).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+                                                            <td className="p-3 font-mono text-amber-600">NT${Number(p.accumulatedDividend || 0).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+                                                            <td className={`p-3 font-mono font-bold ${Number(p.totalReturn||0)>=0?'text-rose-600':'text-emerald-600'}`}>{Number(p.totalReturn||0)>=0?'+':''}NT${Number(p.totalReturn||0).toLocaleString(undefined,{maximumFractionDigits:0})}</td>
+                                                            <td className="p-3 text-center"><span className={`px-2 py-0.5 rounded font-bold ${Number(p.realizedRoi||0)>=0?'text-rose-600 bg-rose-50':'text-emerald-600 bg-emerald-50'}`}>{Number(p.realizedRoi||0)>=0?'+':''}{Number(p.realizedRoi||0).toFixed(2)}%</span></td>
+                                                        </tr>
+                                                    ))}
+                                                </tbody>
+                                            </table>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        );
+                    })()}
 
                     {/* Tab: 記帳 */}
                     {activeTab === 'ledger' && (
