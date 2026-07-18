@@ -64,6 +64,9 @@
             const [activeTab, setActiveTab] = useState('dashboard');
             const [exchangeRate, setExchangeRate] = useState(31.2);
             const [priceData, setPriceData] = useState({});
+            const [nameData, setNameData] = useState(() => {
+                try { return JSON.parse(localStorage.getItem('gw_v15_names') || '{}'); } catch(e) { return {}; }
+            });
             const [priceStatus, setPriceStatus] = useState('載入中');
 
             const [twDiscount] = useState(0.2);
@@ -116,19 +119,22 @@
 
                     const symbols = [...new Set(currentTxs.filter(t => t && t.symbol).map(t => t.symbol.toUpperCase().trim()))];
                     const fetchedPrices = {};
+                    const fetchedNames = {};
 
                     for (const sym of symbols) {
                         if (!sym) continue;
                         try {
-                            let price = 0;
+                            let price = 0, stockName = '';
                             const isAmerican = isNaN(sym) && !/^\d+A?$/.test(sym);
                             if (isAmerican) {
                                 const yfUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}?interval=1d&range=1d`;
                                 const proxyRes = await fetch(`https://corsproxy.io/?${encodeURIComponent(yfUrl)}`);
                                 const json = await proxyRes.json();
-                                price = json?.chart?.result?.[0]?.meta?.regularMarketPrice || 0;
+                                const meta = json?.chart?.result?.[0]?.meta;
+                                price = meta?.regularMarketPrice || 0;
+                                stockName = meta?.shortName || meta?.longName || '';
                             } else {
-                                // 台股：先試 .TW（上市），無資料再試 .TWO（上櫃，如 5289 宜鼎）
+                                // 台股：先試 .TW（上市），無資料再試 .TWO（上櫃，如 5289 宜鼎）；中文名稱由下方證交所 API 統一抓取
                                 for (const suffix of ['.TW', '.TWO']) {
                                     const yfUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}${suffix}?interval=1d&range=1d`;
                                     const proxyRes = await fetch(`https://corsproxy.io/?${encodeURIComponent(yfUrl)}`);
@@ -138,10 +144,34 @@
                                 }
                             }
                             if (price > 0) fetchedPrices[sym] = price;
+                            if (stockName) fetchedNames[sym] = stockName;
                         } catch (err) { console.error('Price fetch failed:', sym, err); }
                     }
+
+                    // 台股中文名稱：用證交所 MIS API 批次抓（上市 tse_ / 上櫃 otc_ 都試）
+                    try {
+                        const cachedNames = JSON.parse(localStorage.getItem('gw_v15_names') || '{}');
+                        const twSyms = symbols.filter(s => s && !(isNaN(s) && !/^\d+A?$/.test(s)) && !STOCK_NAMES[s] && !cachedNames[s]);
+                        if (twSyms.length > 0) {
+                            const exCh = twSyms.map(s => `tse_${s}.tw|otc_${s}.tw`).join('|');
+                            const misUrl = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${exCh}&json=1`;
+                            const misRes = await fetch(`https://corsproxy.io/?${encodeURIComponent(misUrl)}`);
+                            const misJson = await misRes.json();
+                            (misJson?.msgArray || []).forEach(m => {
+                                if (m && m.c && m.n) fetchedNames[m.c.toUpperCase()] = m.n;
+                            });
+                        }
+                    } catch (err) { console.error('TW name fetch failed:', err); }
                     // 合併舊資料，避免部分失敗時清空已有現價
                     setPriceData(prev => ({ ...prev, ...fetchedPrices }));
+                    // 名稱快取到 localStorage，下次開頁不用等 API 也有名稱
+                    if (Object.keys(fetchedNames).length > 0) {
+                        setNameData(prev => {
+                            const merged = { ...prev, ...fetchedNames };
+                            localStorage.setItem('gw_v15_names', JSON.stringify(merged));
+                            return merged;
+                        });
+                    }
                     setPriceStatus('實際');
                 } catch (e) { console.error(e); setPriceStatus('斷線備援'); }
             };
@@ -163,7 +193,7 @@
 
                     if (!summary[cleanSymbol]) {
                         summary[cleanSymbol] = {
-                            symbol: cleanSymbol, name: STOCK_NAMES[cleanSymbol] || name || cleanSymbol, market: isUs ? 'US' : 'TW',
+                            symbol: cleanSymbol, name: STOCK_NAMES[cleanSymbol] || nameData[cleanSymbol] || name || cleanSymbol, market: isUs ? 'US' : 'TW',
                             totalShares: 0, totalBuyShares: 0, totalBuyCostTwd: 0, realizedProfitTwd: 0,
                             totalSellRevenueTwd: 0, lastSellDate: null
                         };
@@ -221,7 +251,7 @@
                         totalProfit: totalProfitTwd, roi
                     };
                 }).filter(s => s && (s.currentShares > 0 || s.realizedProfitTwd !== 0));
-            }, [transactions, dividends, priceData, exchangeRate]);
+            }, [transactions, dividends, priceData, nameData, exchangeRate]);
 
             const stats = useMemo(() => {
                 let totalCostTwd = 0, totalValueTwd = 0, totalProfitTwd = 0;
@@ -678,7 +708,7 @@
                             <form onSubmit={(e) => {
                                 e.preventDefault();
                                 if (!txForm.symbol || !txForm.price || !txForm.shares) return;
-                                setTransactions([{ ...txForm, id: Date.now().toString(), name: STOCK_NAMES[txForm.symbol.toUpperCase().trim()] || txForm.symbol }, ...transactions]);
+                                setTransactions([{ ...txForm, id: Date.now().toString(), name: STOCK_NAMES[txForm.symbol.toUpperCase().trim()] || nameData[txForm.symbol.toUpperCase().trim()] || txForm.symbol }, ...transactions]);
                                 setTxForm({ date: new Date().toISOString().split('T')[0], market: 'TW', symbol: '', type: 'BUY', price: '', shares: '', fee: '20', tax: '0', txRate: '1' });
                             }} className="grid grid-cols-1 sm:grid-cols-4 gap-4 items-end bg-slate-50 p-5 rounded-2xl border border-slate-100">
                                 <div><label className="text-[11px] font-bold text-slate-500 block mb-1">交易日期</label><input type="date" value={txForm.date} onChange={handleFormInput} name="date" className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div>
