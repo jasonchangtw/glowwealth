@@ -8,12 +8,11 @@
     <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body class="bg-slate-50 text-slate-800 antialiased min-h-screen">
     <div id="root">
         <div class="flex items-center justify-center min-h-screen text-slate-400 font-sans">
-            <div class="animate-pulse text-sm">正在連線金融衛星，抓取台美股實時現價與匯率...</div>
+            <div class="animate-pulse text-sm">正在連線金融官方端點，載入台美股最新行情與匯率...</div>
         </div>
     </div>
 
@@ -23,16 +22,16 @@
         const STOCK_NAMES = {
           '0050': '元大台灣50', '00878': '國泰永續高股息', '00929': '復華台灣科技優息', '2330': '台積電',
           '00919': '群益台灣精選高息', '6438': '訊得機械', '2881': '富邦金控', '8462': '柏文', '009811': '統一美國50',
-          '2890': '永豐金', 'QQQ': 'invesco 納斯達克 100 指數 ETF', 'VOO': 'Vanguard 標普 500 指數 ETF',
-          'VT': 'Vanguard 全球股票 (預留)', '1313': '聯成', '00981A': '主動統一台股增長', '00982A': '主動群益台灣強棒',
+          '2890': '永豐金', '6919': '康霈*', 'QQQ': 'invesco 納斯達克 100 指數 ETF', 'VOO': 'Vanguard 標普 500 指數 ETF',
+          'VT': 'Vanguard 全球股票', '1313': '聯成', '00981A': '主動統一台股增長', '00982A': '主動群益台灣強棒',
           '00403A': '主動統一升級50', '5289': '宜鼎', '2317': '鴻海', '2454': '聯發科', 'TSLA': '特斯拉', 'NVDA': '輝達'
         };
 
         function App() {
             const [activeTab, setActiveTab] = useState('dashboard');
-            const [exchangeRate, setExchangeRate] = useState(31.2); 
+            const [exchangeRate, setExchangeRate] = useState(31.5); 
             const [priceData, setPriceData] = useState({}); 
-            const [priceStatus, setPriceStatus] = useState('載入中');
+            const [priceStatus, setPriceStatus] = useState('更新中');
             
             const [twDiscount] = useState(0.2); 
             const [usBuyFeeConfig] = useState(0.09); 
@@ -43,30 +42,25 @@
                     return saved ? JSON.parse(saved) : [];
                 } catch(e) { return []; }
             });
+
             const [dividends, setDividends] = useState(() => {
                 try { return JSON.parse(localStorage.getItem('gw_v15_divs') || '[]'); } catch(e) { return []; }
             });
-            
-            const [gdriveClientId, setGdriveClientId] = useState(() => localStorage.getItem('gw_client_id') || '');
-            const [gdriveToken, setGdriveToken] = useState(null);
-            const [syncStatus, setSyncStatus] = useState('本機模式');
-            const [isSyncing, setIsSyncing] = useState(false);
-            const [cloudFiles, setCloudFiles] = useState([]); 
-            const [selectedFileId, setSelectedFileId] = useState('');
 
             const [txForm, setTxForm] = useState({ date: new Date().toISOString().split('T')[0], symbol: '', type: 'BUY', price: '', shares: '', fee: '20', tax: '0', txRate: '1' });
-            const [divForm, setDivForm] = useState({ date: new Date().toISOString().split('T')[0], market: 'TW', symbol: '', amount: '', taxWithheld: '0', netAmount: '' });
+            const [divForm, setDivForm] = useState({ date: new Date().toISOString().split('T')[0], market: 'TW', symbol: '', netAmount: '' });
 
             useEffect(() => {
                 localStorage.setItem('gw_v15_txs', JSON.stringify(transactions));
                 localStorage.setItem('gw_data', JSON.stringify(transactions));
                 localStorage.setItem('gw_v15_divs', JSON.stringify(dividends));
-                localStorage.setItem('gw_client_id', gdriveClientId);
-            }, [transactions, dividends, gdriveClientId]);
+            }, [transactions, dividends]);
 
-            // 強化版：雙通道平行抓價與防擋備援
+            // 官方批量整合抓價核心（TWSE/TPEx + 美股雙通道）
             const fetchFinancialData = async () => {
                 try {
+                    setPriceStatus('連線中');
+
                     // 1. 抓取匯率
                     try {
                         const fxRes = await fetch('https://open.er-api.com/v6/latest/USD');
@@ -75,7 +69,7 @@
                             setExchangeRate(parseFloat(fxData.rates.TWD.toFixed(2)));
                         }
                     } catch (fxErr) {
-                        console.warn('匯率抓取失敗，維持預設匯率', fxErr);
+                        console.warn('匯率抓取失敗，維持現有匯率', fxErr);
                     }
 
                     if (!transactions || transactions.length === 0) {
@@ -86,14 +80,60 @@
                     const symbols = [...new Set(transactions.filter(t => t && t.symbol).map(t => t.symbol.toUpperCase().trim()))];
                     const fetchedPrices = { ...priceData };
 
-                    // 2. 平行非同步抓取
-                    await Promise.allSettled(symbols.map(async (sym) => {
-                        if (!sym) return;
+                    const twSymbols = [];
+                    const usSymbols = [];
 
+                    symbols.forEach(sym => {
                         const isUs = isNaN(sym) && !sym.endsWith('A');
+                        if (isUs) usSymbols.push(sym);
+                        else twSymbols.push(sym);
+                    });
 
-                        if (isUs) {
-                            // 美股通道 A：Stooq CSV
+                    // 2. 台股官方端點批量抓取（同時涵蓋上市與上櫃）
+                    if (twSymbols.length > 0) {
+                        try {
+                            const queryChannels = twSymbols.flatMap(s => {
+                                const clean = s.replace(/[^0-9]/g, '');
+                                return [`tse_${clean}.tw`, `otc_${clean}.tw`];
+                            }).join('|');
+
+                            const twseUrl = `https://mis.twse.com.tw/stock/api/getStockInfo.jsp?ex_ch=${queryChannels}&json=1&delay=0`;
+                            const proxyUrl = `https://corsproxy.io/?url=${encodeURIComponent(twseUrl)}`;
+                            
+                            const twRes = await fetch(proxyUrl);
+                            const twJson = await twRes.json();
+                            
+                            if (twJson?.msgArray && twJson.msgArray.length > 0) {
+                                twJson.msgArray.forEach(item => {
+                                    const code = item.c;
+                                    const rawPrice = item.z && item.z !== '-' ? item.z : item.y;
+                                    const price = parseFloat(rawPrice);
+                                    if (!isNaN(price) && price > 0) {
+                                        const origSym = twSymbols.find(s => s.replace(/[^0-9]/g, '') === code);
+                                        if (origSym) fetchedPrices[origSym] = price;
+                                    }
+                                });
+                            }
+                        } catch (twErr) {
+                            console.warn('台股官方介面異常，切換備用通道:', twErr);
+                            await Promise.allSettled(twSymbols.map(async (sym) => {
+                                try {
+                                    const clean = sym.replace(/[^0-9]/g, '');
+                                    const startDate = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+                                    const res = await fetch(`https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=${clean}&start_date=${startDate}`);
+                                    const d = await res.json();
+                                    if (d?.data?.length > 0) {
+                                        const p = parseFloat(d.data[d.data.length - 1].close);
+                                        if (!isNaN(p) && p > 0) fetchedPrices[sym] = p;
+                                    }
+                                } catch (e) {}
+                            }));
+                        }
+                    }
+
+                    // 3. 美股雙通道抓取
+                    if (usSymbols.length > 0) {
+                        await Promise.allSettled(usSymbols.map(async (sym) => {
                             let price = 0;
                             try {
                                 const stooqUrl = `https://stooq.com/q/l/?s=${sym.toLowerCase()}.us&f=sd2t2ohlcv&h&e=csv`;
@@ -107,49 +147,31 @@
                                 }
                             } catch (e1) {}
 
-                            // 美股通道 B：Yahoo Finance API 備援
                             if (!price) {
                                 try {
                                     const yfUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${sym}`;
                                     const res = await fetch(`https://corsproxy.io/?url=${encodeURIComponent(yfUrl)}`);
-                                    const data = await res.json();
-                                    const p = data?.chart?.result?.[0]?.meta?.regularMarketPrice;
+                                    const d = await res.json();
+                                    const p = d?.chart?.result?.[0]?.meta?.regularMarketPrice;
                                     if (p && p > 0) price = p;
-                                } catch (e2) {
-                                    console.warn(`美股 ${sym} 抓價失敗:`, e2);
-                                }
+                                } catch (e2) {}
                             }
 
                             if (price > 0) fetchedPrices[sym] = price;
-                        } else {
-                            // 台股抓取：拉長回溯 14 天避免長假無報價
-                            try {
-                                const cleanSym = sym.replace(/[^0-9]/g, '');
-                                const startDate = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-                                const twRes = await fetch(`https://api.finmindtrade.com/api/v4/data?dataset=TaiwanStockPrice&data_id=${cleanSym}&start_date=${startDate}`);
-                                const twData = await twRes.json();
-                                if (twData?.data && twData.data.length > 0) {
-                                    const latest = twData.data[twData.data.length - 1];
-                                    const p = parseFloat(latest.close);
-                                    if (!isNaN(p) && p > 0) fetchedPrices[sym] = p;
-                                }
-                            } catch (err) {
-                                console.warn(`台股 ${sym} 抓價失敗:`, err);
-                            }
-                        }
-                    }));
+                        }));
+                    }
 
                     setPriceData(fetchedPrices);
                     setPriceStatus('實際');
                 } catch (e) {
                     console.error('抓價流程異常:', e);
-                    setPriceStatus('斷線備援');
+                    setPriceStatus('部分備援');
                 }
             };
 
             useEffect(() => { fetchFinancialData(); }, [transactions]);
 
-            // 資產統計與投資組合計算
+            // 資產統計運算核心
             const portfolio = useMemo(() => {
                 const summary = {};
                 if (!transactions || !Array.isArray(transactions)) return [];
@@ -163,8 +185,13 @@
 
                     if (!summary[cleanSymbol]) {
                         summary[cleanSymbol] = { 
-                            symbol: cleanSymbol, name: STOCK_NAMES[cleanSymbol] || name || cleanSymbol, market: isUs ? 'US' : 'TW', 
-                            totalShares: 0, totalBuyShares: 0, totalBuyCostTwd: 0, realizedProfitTwd: 0
+                            symbol: cleanSymbol, 
+                            name: STOCK_NAMES[cleanSymbol] || name || cleanSymbol, 
+                            market: isUs ? 'US' : 'TW', 
+                            totalShares: 0, 
+                            totalBuyShares: 0, 
+                            totalBuyCostTwd: 0, 
+                            realizedProfitTwd: 0
                         };
                     }
                     
@@ -273,11 +300,10 @@
                 <div className="p-4 md:p-8 max-w-7xl mx-auto space-y-6">
                     <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 border-b border-slate-200 pb-4">
                         <div>
-                            <div className="text-xs text-slate-400 font-mono font-bold uppercase tracking-wider">投資儀表板 (美元匯率: {exchangeRate})</div>
-                            <h1 className="text-3xl font-black text-slate-900 tracking-tight mt-1">家庭總覽</h1>
+                            <div className="text-xs text-slate-400 font-mono font-bold uppercase tracking-wider">投資總覽 (當前匯率: {exchangeRate})</div>
+                            <h1 className="text-3xl font-black text-slate-900 tracking-tight mt-1">家庭投資總覽</h1>
                         </div>
                         <div className="flex flex-wrap gap-2">
-                            <span className="px-3 py-1.5 rounded-xl text-xs font-bold bg-slate-200/60 text-slate-600">{syncStatus}</span>
                             <button onClick={fetchFinancialData} className="bg-white border border-slate-200 hover:bg-slate-50 px-3 py-1.5 rounded-xl text-xs font-bold shadow-sm text-slate-700 transition">🔄 刷新現價 ({priceStatus})</button>
                             <button onClick={() => setActiveTab('ledger')} className="bg-slate-900 hover:bg-slate-800 text-white px-4 py-1.5 rounded-xl text-xs font-bold shadow-md transition">＋ 新增紀錄</button>
                         </div>
@@ -286,7 +312,7 @@
                     <div className="flex gap-1 bg-slate-200/50 p-1 rounded-xl w-full md:w-80">
                         {['dashboard', 'ledger', 'dividend', 'drive'].map(t => (
                             <button key={t} onClick={() => setActiveTab(t)} className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${activeTab === t ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-800'}`}>
-                                {t==='dashboard'?'總覽':t==='ledger'?'記帳':t==='dividend'?'配息':'同步'}
+                                {t==='dashboard'?'總覽':t==='ledger'?'記帳':t==='dividend'?'配息':'備份'}
                             </button>
                         ))}
                     </div>
@@ -296,7 +322,7 @@
                         <div className="space-y-6">
                             <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                                 <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
-                                    <div className="text-[11px] font-bold text-slate-400 tracking-wider">總資產 (換算台幣)</div>
+                                    <div className="text-[11px] font-bold text-slate-400 tracking-wider">總資產 (TWD)</div>
                                     <div className="text-xl md:text-2xl font-black text-slate-900 mt-2">${Number(stats.totalValue || 0).toLocaleString(undefined, {maximumFractionDigits:0})}</div>
                                 </div>
                                 <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
@@ -304,21 +330,21 @@
                                     <div className={`text-xl md:text-2xl font-black mt-2 ${stats.roi >= 0 ? 'text-rose-600' : 'text-emerald-600'}`}>{stats.roi >= 0 ? '+' : ''}{Number(stats.roi || 0).toFixed(2)}%</div>
                                 </div>
                                 <div className="bg-white border border-slate-100 rounded-2xl p-5 shadow-sm">
-                                    <div className="text-[11px] font-bold text-slate-400 tracking-wider">配息累計收入</div>
+                                    <div className="text-[11px] font-bold text-slate-400 tracking-wider">累計配息 (TWD)</div>
                                     <div className="text-xl md:text-2xl font-black text-slate-900 mt-2">${Number(stats.divIncome || 0).toLocaleString(undefined, {maximumFractionDigits:0})}</div>
                                 </div>
                             </div>
 
                             <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm space-y-4">
-                                <h3 className="font-extrabold text-slate-800 text-sm tracking-tight">資產明細管理庫存 (外幣資產顯示原幣別數值)</h3>
+                                <h3 className="font-extrabold text-slate-800 text-sm tracking-tight">資產庫存明細 (外幣以原幣計)</h3>
                                 <div className="overflow-x-auto">
                                     <table className="w-full text-left text-xs md:text-sm border-collapse">
                                         <thead>
                                             <tr className="border-b border-slate-200 text-slate-500 font-bold bg-slate-50 text-[11px]">
                                                 <th className="p-3">標的</th>
                                                 <th className="p-3">名稱</th>
-                                                <th className="p-3">目前持股</th>
-                                                <th className="p-3">平均成本</th>
+                                                <th className="p-3">持股</th>
+                                                <th className="p-3">均買成本</th>
                                                 <th className="p-3">最新現價</th>
                                                 <th className="p-3">投入成本</th>
                                                 <th className="p-3">當前市值</th>
@@ -405,13 +431,14 @@
                         <div className="bg-white border border-slate-100 rounded-2xl p-6 shadow-sm space-y-6">
                             <form onSubmit={(e)=>{
                                 e.preventDefault(); 
-                                if(!divForm.symbol||!divForm.amount) return; 
-                                setDividends([{...divForm, id:Date.now().toString(), name:STOCK_NAMES[divForm.symbol.toUpperCase().trim()]||divForm.symbol}, ...dividends]); 
-                                setDivForm({date:new Date().toISOString().split('T')[0], market:divForm.market, symbol:'', amount:'', taxWithheld:'0', netAmount:''});
+                                if(!divForm.symbol||!divForm.netAmount) return; 
+                                const isUs = isNaN(divForm.symbol) && !divForm.symbol.endsWith('A');
+                                setDividends([{...divForm, id:Date.now().toString(), market: isUs ? 'US' : 'TW', name:STOCK_NAMES[divForm.symbol.toUpperCase().trim()]||divForm.symbol}, ...dividends]); 
+                                setDivForm({date:new Date().toISOString().split('T')[0], market: 'TW', symbol:'', netAmount:''});
                             }} className="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end bg-slate-50 p-4 rounded-xl border border-slate-100">
                                 <div><label className="text-[11px] font-bold text-slate-500 block mb-1">配息日期</label><input type="date" value={divForm.date} onChange={e=>setDivForm({...divForm, date:e.target.value})} className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs" /></div>
                                 <div><label className="text-[11px] font-bold text-slate-500 block mb-1">代號</label><input type="text" placeholder="0056" value={divForm.symbol} onChange={e=>setDivForm({...divForm, symbol:e.target.value.toUpperCase().trim()})} className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs uppercase font-mono" /></div>
-                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">實收淨額</label><input type="number" placeholder="金額" value={divForm.netAmount} onChange={e=>setDivForm({...divForm, netAmount:e.target.value})} className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs font-mono" /></div>
+                                <div><label className="text-[11px] font-bold text-slate-500 block mb-1">實收金額</label><input type="number" step="any" placeholder="金額" value={divForm.netAmount} onChange={e=>setDivForm({...divForm, netAmount:e.target.value})} className="w-full bg-white border border-slate-200 p-2 rounded-lg text-xs font-mono" /></div>
                                 <button type="submit" className="w-full bg-slate-900 text-white font-bold py-2 rounded-lg text-xs hover:bg-slate-800">存入配息本</button>
                             </form>
                             <table className="w-full text-left text-sm">
@@ -433,7 +460,8 @@
                     {/* Tab 4: 備份 */}
                     {activeTab === 'drive' && (
                         <div className="max-w-md mx-auto bg-white border border-slate-100 rounded-2xl p-6 shadow-sm space-y-4">
-                            <h3 className="font-extrabold text-slate-800 text-sm">JSON 備份與還原</h3>
+                            <h3 className="font-extrabold text-slate-800 text-sm">JSON 備份與匯出</h3>
+                            <p className="text-xs text-slate-500">可將目前瀏覽器儲存的交易與配息資料匯出為檔案留存。</p>
                             <button onClick={()=>{
                                 const blob = new Blob([JSON.stringify({transactions, dividends}, null, 2)], {type : 'application/json'});
                                 const url = URL.createObjectURL(blob);
@@ -441,7 +469,7 @@
                                 a.href = url;
                                 a.download = `glowwealth_backup_${new Date().toISOString().split('T')[0]}.json`;
                                 a.click();
-                            }} className="w-full bg-slate-900 text-white font-bold py-2.5 rounded-xl text-xs hover:bg-slate-800 shadow">💾 匯出目前所有資料 (下載 JSON)</button>
+                            }} className="w-full bg-slate-900 text-white font-bold py-2.5 rounded-xl text-xs hover:bg-slate-800 shadow">💾 匯出備份檔案 (JSON)</button>
                         </div>
                     )}
                 </div>
