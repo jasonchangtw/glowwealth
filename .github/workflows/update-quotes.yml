@@ -1,0 +1,66 @@
+name: Update public quotes and deploy dashboard
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - index.html
+      - quotes.json
+      - quote-symbols.json
+      - scripts/update_quotes.py
+      - .github/workflows/update-quotes.yml
+  workflow_dispatch:
+  schedule:
+    # Every 30 minutes, off the busy start of the hour. UTC; delays are possible.
+    - cron: '17,47 * * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: glowwealth-pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pages: read
+    steps:
+      - uses: actions/checkout@v6
+      - name: Verify quote handling and unchanged sync payloads
+        run: |
+          python3 -m unittest discover -s tests -v
+          node tests/quotes_frontend.cjs
+          node tests/sync_contract.cjs
+      - name: Configure Pages
+        id: pages
+        uses: actions/configure-pages@v5
+      - name: Collect free public quotes
+        env:
+          PAGES_BASE_URL: ${{ steps.pages.outputs.base_url }}
+        run: python3 scripts/update_quotes.py --previous-url "${PAGES_BASE_URL}/quotes.json"
+      - name: Package only the public website
+        run: |
+          mkdir -p _site
+          cp index.html quotes.json _site/
+          touch _site/.nojekyll
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: _site
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publish dashboard and public quotes
+        id: deployment
+        uses: actions/deploy-pages@v4
