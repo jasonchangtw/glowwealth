@@ -41,6 +41,26 @@ class QuotesTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 q.yahoo_quote(raw, 'VOO', q.stamp())
 
+    def test_taiwan_yahoo_exact_venue_and_currency(self):
+        item = q.yahoo_quote(self.yahoo('2330.TW', 'TWD'), '2330', q.stamp(), 'TW', 'tse')
+        self.assertEqual(item['currency'], 'TWD')
+        self.assertEqual(item['symbol'], '2330')
+        self.assertEqual(item['market'], 'TW')
+        self.assertEqual(q.yahoo_quote(self.yahoo('6438.TWO', 'TWD'), '6438', q.stamp(), 'TW', 'otc')['venue'], 'otc')
+        for raw in [self.yahoo('2330.TW', 'USD'), self.yahoo('2330.TWO', 'TWD')]:
+            with self.assertRaises(ValueError):
+                q.yahoo_quote(raw, '2330', q.stamp(), 'TW', 'tse')
+
+    def test_cloud_blocked_taiwan_uses_public_backup(self):
+        def fake(url):
+            if '/2330.TW?' in url:
+                return self.yahoo('2330.TW', 'TWD')
+            raise RuntimeError('Cloud IP blocked')
+        result = q.collect({'tw': ['2330'], 'us': []}, {}, fake)
+        self.assertEqual(result['quotes']['TW:2330']['status'], 'ok')
+        self.assertEqual(result['quotes']['TW:2330']['source'], 'Yahoo chart')
+        self.assertIn('TWSE', result['errors'])
+
     def test_never_roll_back_quote_time(self):
         old = q.yahoo_quote(self.yahoo(), 'VOO', q.stamp())
         quotes = {'US:VOO': old}

@@ -132,22 +132,26 @@ def mis_quotes(payload, fetched_at):
     return result
 
 
-def yahoo_quote(payload, symbol, fetched_at):
+def yahoo_quote(payload, symbol, fetched_at, market="US", venue=None):
     chart = payload.get('chart', {}) if isinstance(payload, dict) else {}
     if chart.get('error') or not chart.get('result'):
         raise ValueError('Yahoo missing result or chart.error')
     meta = chart['result'][0].get('meta', {})
-    if meta.get('symbol', '').upper() != symbol or meta.get('currency') != 'USD':
+    provider_symbol = symbol if market == 'US' else symbol + ('.TWO' if venue == 'otc' else '.TW')
+    currency = 'USD' if market == 'US' else 'TWD'
+    if meta.get('symbol', '').upper() != provider_symbol or meta.get('currency') != currency:
         raise ValueError('Yahoo symbol/currency mismatch')
     price = positive(meta.get('regularMarketPrice'))
     timestamp = positive(meta.get('regularMarketTime'))
     if price is None or timestamp is None:
         raise ValueError('Yahoo missing price/time')
-    item = {'symbol': symbol, 'market': 'US', 'currency': 'USD', 'price': price,
+    item = {'symbol': symbol, 'market': market, 'currency': currency, 'price': price,
             'name': meta.get('shortName') or meta.get('longName') or symbol,
             'quoteTime': dt.datetime.fromtimestamp(timestamp, UTC).isoformat(),
             'fetchedAt': fetched_at, 'source': 'Yahoo chart', 'kind': 'trade', 'status': 'ok'}
-    if not valid_quote('US:' + symbol, item):
+    if venue:
+        item['venue'] = venue
+    if not valid_quote(market + ':' + symbol, item):
         raise ValueError('Invalid Yahoo quote')
     return item
 
@@ -212,6 +216,36 @@ def collect(config, previous, get=fetch_json):
                     errors['TW:' + symbol] = 'No valid MIS last trade; using daily/previous quote if available'
         except Exception as exc:
             errors['MIS'] = str(exc)
+
+    # Taiwan official endpoints may block cloud-runner IPs. Use a separately
+    # validated public provider only for configured symbols still unrefreshed.
+    def get_tw_fallback(symbol):
+        known = quotes.get('TW:' + symbol, {})
+        venues = [known['venue']] if known.get('venue') in ('tse', 'otc') else ['tse', 'otc']
+        last_error = None
+        for venue in venues:
+            provider_symbol = symbol + ('.TWO' if venue == 'otc' else '.TW')
+            try:
+                payload = get('https://query1.finance.yahoo.com/v8/finance/chart/' +
+                              quote(provider_symbol, safe='') + '?interval=1d&range=5d')
+                return yahoo_quote(payload, symbol, now, 'TW', venue)
+            except Exception as exc:
+                last_error = exc
+        raise last_error or ValueError('No Taiwan quote')
+
+    pending_tw = [symbol for symbol in tw_symbols
+                  if quotes.get('TW:' + symbol, {}).get('status') != 'ok']
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
+        jobs = {pool.submit(get_tw_fallback, symbol): symbol for symbol in pending_tw}
+        for job in concurrent.futures.as_completed(jobs):
+            symbol = jobs[job]
+            try:
+                merge_quote(quotes, 'TW:' + symbol, job.result())
+                successes += 1
+                if quotes.get('TW:' + symbol, {}).get('status') == 'ok':
+                    errors.pop('TW:' + symbol, None)
+            except Exception as exc:
+                errors['TW:' + symbol] = 'Yahoo backup: ' + str(exc)
 
     def get_us(symbol):
         return yahoo_quote(get('https://query1.finance.yahoo.com/v8/finance/chart/' +
